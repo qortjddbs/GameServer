@@ -1,0 +1,28 @@
+## [ Visual Studio 캐시 및 임시 파일 ]
+.vs/
+Debug/
+Release/
+x64/
+x86/
+*.ipch
+*.db
+*.opendb
+*.sdf
+*.suo
+*.user
+*.aps
+*.ncb
+*.log
+
+## [ 컴파일 결과물 ]
+*.exe
+*.dll
+*.lib
+*.obj
+*.pdb
+*.ilk
+*.exp
+
+## [ 기타 OS 및 도구 ]
+.DS_Store
+Thumbs.db
