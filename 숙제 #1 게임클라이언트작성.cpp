@@ -13,10 +13,10 @@ void InitBoard(char board[8][8]) {
 	for (int i = 0; i < 8; ++i) {
 		for (int j = 0; j < 8; ++j) {
 			if ((i + j) % 2 == 0) {		// 맞으면 흰색(-), 아니면 검은색(+) 칸
-				board[i][j] = '-';
+				board[i][j] = 'W';
 			}
 			else {
-				board[i][j] = '+';
+				board[i][j] = 'B';
 			}
 		}
 	}
@@ -41,7 +41,7 @@ int main(void) {
 	InitBoard(board);
 
 	// 체스 말 집어넣기
-	board[px][py] = '@';
+	board[px][py] = '*';
 
 	// 체스판 띄우기
 	PrintBoard(board);
@@ -53,34 +53,34 @@ int main(void) {
 		switch (key) {
 		case UP:
 			if (px > 0) {
-				if ((px + py) % 2 == 0) board[px][py] = '-';
-				else board[px][py] = '+';
+				if ((px + py) % 2 == 0) board[px][py] = 'W';
+				else board[px][py] = 'B';
 				px--;
-				board[px][py] = '@';
+				board[px][py] = '*';
 			}
 			break;
 		case DOWN:
 			if (px < 7) {
-				if ((px + py) % 2 == 0) board[px][py] = '-';
-				else board[px][py] = '+';
+				if ((px + py) % 2 == 0) board[px][py] = 'W';
+				else board[px][py] = 'B';
 				px++;
-				board[px][py] = '@';
+				board[px][py] = '*';
 			}
 			break;
 		case RIGHT:
 			if (py < 7) {
-				if ((px + py) % 2 == 0) board[px][py] = '-';
-				else board[px][py] = '+';
+				if ((px + py) % 2 == 0) board[px][py] = 'W';
+				else board[px][py] = 'B';
 				py++;
-				board[px][py] = '@';
+				board[px][py] = '*';
 			}
 			break;
 		case LEFT:
 			if (py > 0) {
-				if ((px + py) % 2 == 0) board[px][py] = '-';
-				else board[px][py] = '+';
+				if ((px + py) % 2 == 0) board[px][py] = 'W';
+				else board[px][py] = 'B';
 				py--;
-				board[px][py] = '@';
+				board[px][py] = '*';
 			}
 			break;
 		case EXIT:		// q누르면 나가기
