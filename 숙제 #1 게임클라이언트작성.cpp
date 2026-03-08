@@ -41,7 +41,7 @@ int main(void) {
 	InitBoard(board);
 
 	// 체스 말 집어넣기
-	board[px][py] = '*';
+	board[py][px] = '*';
 
 	// 체스판 띄우기
 	PrintBoard(board);
@@ -52,42 +52,41 @@ int main(void) {
 		// cout << key << endl;
 		switch (key) {
 		case UP:
-			if (px > 0) {
-				if ((px + py) % 2 == 0) board[px][py] = 'W';
-				else board[px][py] = 'B';
-				px--;
-				board[px][py] = '*';
+			if (py > 0) {
+				if ((px + py) % 2 == 0) board[py][px] = 'W';
+				else board[py][px] = 'B';
+				py--;
+				board[py][px] = '*';
 			}
 			break;
 		case DOWN:
-			if (px < 7) {
-				if ((px + py) % 2 == 0) board[px][py] = 'W';
-				else board[px][py] = 'B';
-				px++;
-				board[px][py] = '*';
+			if (py < 7) {
+				if ((px + py) % 2 == 0) board[py][px] = 'W';
+				else board[py][px] = 'B';
+				py++;
+				board[py][px] = '*';
 			}
 			break;
 		case RIGHT:
-			if (py < 7) {
-				if ((px + py) % 2 == 0) board[px][py] = 'W';
-				else board[px][py] = 'B';
-				py++;
-				board[px][py] = '*';
+			if (px < 7) {
+				if ((px + py) % 2 == 0) board[py][px] = 'W';
+				else board[py][px] = 'B';
+				px++;
+				board[py][px] = '*';
 			}
 			break;
 		case LEFT:
-			if (py > 0) {
-				if ((px + py) % 2 == 0) board[px][py] = 'W';
-				else board[px][py] = 'B';
-				py--;
-				board[px][py] = '*';
+			if (px > 0) {
+				if ((px + py) % 2 == 0) board[py][px] = 'W';
+				else board[py][px] = 'B';
+				px--;
+				board[py][px] = '*';
 			}
 			break;
 		case EXIT:		// q누르면 나가기
 			exit(0);
 			break;
 		}
-
 		system("cls");
 		PrintBoard(board);
 	 }
