@@ -13,16 +13,25 @@
       <UniqueIdentifier>{67DA6AB6-F800-4c08-8B7A-83BB121AAD01}</UniqueIdentifier>
       <Extensions>rc;ico;cur;bmp;dlg;rc2;rct;bin;rgs;gif;jpg;jpeg;jpe;resx;tiff;tif;png;wav;mfcribbon-ms</Extensions>
     </Filter>
+    <Filter Include="소스 파일\수업 실습">
+      <UniqueIdentifier>{c242f061-5db1-4527-bcac-5b2fa309b586}</UniqueIdentifier>
+    </Filter>
+    <Filter Include="소스 파일\과제">
+      <UniqueIdentifier>{0620e6e4-f112-498a-aea6-9a3b7c3f6749}</UniqueIdentifier>
+    </Filter>
   </ItemGroup>
   <ItemGroup>
-    <ClCompile Include="SystemCall.cpp">
-      <Filter>소스 파일</Filter>
-    </ClCompile>
     <ClCompile Include="CacheMiss.cpp">
-      <Filter>소스 파일</Filter>
+      <Filter>소스 파일\수업 실습</Filter>
+    </ClCompile>
+    <ClCompile Include="SystemCall.cpp">
+      <Filter>소스 파일\수업 실습</Filter>
     </ClCompile>
     <ClCompile Include="행렬 곱.cpp">
-      <Filter>소스 파일</Filter>
+      <Filter>소스 파일\수업 실습</Filter>
+    </ClCompile>
+    <ClCompile Include="숙제 #1 게임클라이언트작성.cpp">
+      <Filter>소스 파일\과제</Filter>
     </ClCompile>
   </ItemGroup>
 </Project>
