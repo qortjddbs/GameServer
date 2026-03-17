@@ -33,5 +33,14 @@
     <ClCompile Include="숙제 #1 게임클라이언트작성.cpp">
       <Filter>소스 파일\과제</Filter>
     </ClCompile>
+    <ClCompile Include="matirix_multiply.cpp">
+      <Filter>소스 파일\수업 실습</Filter>
+    </ClCompile>
+    <ClCompile Include="PipelineStall.cpp">
+      <Filter>소스 파일\수업 실습</Filter>
+    </ClCompile>
+    <ClCompile Include="EchoServer.cpp">
+      <Filter>소스 파일\수업 실습</Filter>
+    </ClCompile>
   </ItemGroup>
 </Project>
