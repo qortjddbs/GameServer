@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="over_echo_client/over_echo_client.vcxproj" Id="ce97564f-a2b1-4519-bc92-f139629cf228" />
+</Solution>

@@ -31,7 +31,7 @@ int main() {
 		WSABUF send_was_buf = { recv_size, recv_buffer };
 		WSASend(c_socket, &send_was_buf, 1, &sent_size, 0, nullptr, nullptr);
 
-		std::cout << recv_size << "Sent to client: " << std::endl;
+		std::cout << recv_size << " Sent to client" << std::endl;
 	}
 	WSACleanup();
 }
