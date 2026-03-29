@@ -1,0 +1,7 @@
+<Solution>
+  <Configurations>
+    <Platform Name="x64" />
+    <Platform Name="x86" />
+  </Configurations>
+  <Project Path="iocp_chat_server/iocp_chat_server.vcxproj" Id="bd5a6ece-35bf-423a-8936-eea94a964c46" />
+</Solution>
