@@ -11,7 +11,27 @@
 
 // const char* SERVER_IP = "172.30.1.72";		// 127.0.0.1 -> 자기자신에게 연결 (특수한 번호)
 constexpr short SERVER_PORT = 3000;		// 서버 포트 번호
-constexpr int BUFFER_SIZE = 4096;			// 버퍼 크기
+
+char board[8][8];
+int current_px = 3;
+int current_py = 3;
+
+#pragma pack(push, 1)	// 메모리 꽉꽉 눌러담기
+struct KeyPacket {
+	int key;
+};
+
+struct PosPacket {
+	int x, y;
+};
+#pragma pack(pop)		// 원래 설정으로 복귀
+
+PosPacket g_c_pos_packet{};
+KeyPacket g_c_key_packet{};
+WSABUF g_recv_wsa_buf{ sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet)};
+WSABUF g_send_wsa_buf{ sizeof(PosPacket), reinterpret_cast<char*>(&g_c_pos_packet)};
+WSAOVERLAPPED g_recv_overlapped{}, g_send_overlapped{};
+SOCKET g_s_socket;
 
 void error_display(const wchar_t* msg, int err_no)
 {
@@ -49,15 +69,68 @@ void PrintBoard(char board[8][8]) {
 	}
 }
 
-#pragma pack(push, 1)	// 메모리 꽉꽉 눌러담기
-struct KeyPacket {
-	int key;
-};
+void CALLBACK send_callback(DWORD, DWORD, LPWSAOVERLAPPED, DWORD);
 
-struct PosPacket {
-	int x, y;
-};
-#pragma pack(pop)		// 원래 설정으로 복귀
+void send_to_server() {
+	std::wcout << L"방향키를 입력하세요!";
+	int key = _getch();
+	if (key == 224) {		// 서버창에 두번 뜨길래 버퍼 비워주기
+		key = _getch();
+	}
+	g_c_key_packet = { key };
+	g_send_wsa_buf = { sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet) };
+	DWORD sent_size = 0;
+	int result = WSASend(g_s_socket, &g_send_wsa_buf, 1, &sent_size, 0, &g_send_overlapped, send_callback);
+	if (result == SOCKET_ERROR) {
+		error_display(L"데이터 전송 실패", WSAGetLastError());
+		WSACleanup();
+		exit(1);
+	}
+}
+
+void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPED overlapped, DWORD flags)
+{
+	if (error != 0) {
+		error_display(L"데이터 수신 실패", WSAGetLastError());
+		exit(1);
+	}
+	if ((current_px + current_py) % 2 == 0) {
+		board[current_py][current_px] = 'W';
+	}
+	else {
+		board[current_py][current_px] = 'B';
+	}
+
+	current_px = g_c_pos_packet.x;
+	current_py = g_c_pos_packet.y;
+	board[current_py][current_px] = '*';
+
+	system("cls");
+	std::cout << "서버로부터 위치 패킷 수신! (x: " << g_c_pos_packet.x << ", y: " << g_c_pos_packet.y << ")" << std::endl;
+	std::cout << "(" << current_px << ", " << current_py << ")" << std::endl;
+	PrintBoard(board);
+
+	send_to_server();
+}
+
+void CALLBACK send_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPED overlapped, DWORD flags)
+{
+	if (error != 0) {
+		error_display(L"데이터 전송 실패", WSAGetLastError());
+		return;
+	}
+	g_recv_wsa_buf = { sizeof(PosPacket), reinterpret_cast<char*>(&g_c_pos_packet) };
+	DWORD recv_flag = 0;
+	ZeroMemory(&g_recv_overlapped, sizeof(g_recv_overlapped));
+	int result = WSARecv(g_s_socket, &g_recv_wsa_buf, 1, nullptr, &recv_flag, &g_recv_overlapped, recv_callback);
+	if (result == SOCKET_ERROR) {
+		int err_no = WSAGetLastError();
+		if (err_no != WSA_IO_PENDING) {		// 비동기 작업이 아직 완료되지 않았다는 뜻, 이 경우는 에러가 아님
+			error_display(L"데이터 수신 실패", WSAGetLastError());
+			exit(1);
+		}
+	}
+}
 
 int main(void) {
 	std::wcout.imbue(std::locale("korean"));		// 이걸 안쓰면 이상한 라틴어로 나옴
@@ -69,60 +142,26 @@ int main(void) {
 
 	WSADATA wsa_data{};
 	WSAStartup(MAKEWORD(2, 2), &wsa_data);			// 윈도우에서 인터넷 소켓 프로그래밍하려면 넣어줘야함 (리눅스는 필요없음)
-	SOCKET s_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, 0);	// TCP 소켓 생성
+	g_s_socket = WSASocket(AF_INET, SOCK_STREAM, IPPROTO_TCP, nullptr, 0, WSA_FLAG_OVERLAPPED);	// TCP 소켓 생성
 	SOCKADDR_IN server_addr{};
 	server_addr.sin_family = AF_INET;				// IPv4
 	server_addr.sin_port = htons(SERVER_PORT);				// 포트 번호 변환
 	inet_pton(AF_INET, server_ip, &server_addr.sin_addr);	// IP 주소 변환
-	int result = WSAConnect(s_socket, reinterpret_cast<SOCKADDR*>(&server_addr), sizeof(server_addr), nullptr, nullptr, nullptr, nullptr);
+	int result = WSAConnect(g_s_socket, reinterpret_cast<SOCKADDR*>(&server_addr), sizeof(server_addr), nullptr, nullptr, nullptr, nullptr);
 	if (result == SOCKET_ERROR) {
 		error_display(L"서버 연결 실패", WSAGetLastError());
 		WSACleanup();
 		return 1;
 	}
 
-	char board[8][8];
 	InitBoard(board);
-	int current_px = 3;
-	int current_py = 3;
 	board[current_px][current_py] = '*';
 	PrintBoard(board);
 
+	send_to_server();
+
 	for (;;) {
-		std::wcout << L"방향키를 입력하세요!";
-		int key = _getch();
-		if (key == 224) {		// 서버창에 두번 뜨길래 버퍼 비워주기
-			key = _getch();
-		}
-		KeyPacket c_k_packet{ key };
-		WSABUF wsa_buf{ sizeof(KeyPacket), reinterpret_cast<char*>(&c_k_packet) };
-		DWORD sent_size = 0;
-		int result = WSASend(s_socket, &wsa_buf, 1, &sent_size, 0, nullptr, nullptr);
-		if (result == SOCKET_ERROR) {
-			error_display(L"데이터 전송 실패", WSAGetLastError());
-			WSACleanup();
-			return 1;
-		}
-
-		PosPacket c_p_packet{};
-		WSABUF recv_wsa_buf{ sizeof(PosPacket), reinterpret_cast<char*>(&c_p_packet)};
-		DWORD recv_size = 0;
-		DWORD recv_flag = 0;
-		WSARecv(s_socket, &recv_wsa_buf, 1, &recv_size, &recv_flag, nullptr, nullptr);
-
-		if ((current_px + current_py) % 2 == 0) {
-			board[current_py][current_px] = 'W';
-		}
-		else {
-			board[current_py][current_px] = 'B';
-		}
-
-		current_px = c_p_packet.x;
-		current_py = c_p_packet.y;
-		board[current_py][current_px] = '*';
-
-		system("cls");
-		PrintBoard(board);
+		SleepEx(0, TRUE);
 	}
 	WSACleanup();
 }

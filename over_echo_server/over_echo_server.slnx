@@ -3,5 +3,5 @@
     <Platform Name="x64" />
     <Platform Name="x86" />
   </Configurations>
-  <Project Path="over_echo_server/over_echo_server.vcxproj" />
+  <Project Path="over_echo_server/over_echo_server.vcxproj" Id="a2aaa3c7-b396-44d0-901d-8a5a20d5ed33" />
 </Solution>
