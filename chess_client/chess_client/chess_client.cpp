@@ -9,7 +9,7 @@
 #define LEFT 75
 #define EXIT 113	// q키
 
-// const char* SERVER_IP = "172.30.1.72";		// 127.0.0.1 -> 자기자신에게 연결 (특수한 번호)
+// const char* SERVER_IP = "172.30.1.87";		// 127.0.0.1 -> 자기자신에게 연결 (특수한 번호)
 constexpr short SERVER_PORT = 3000;		// 서버 포트 번호
 
 char board[8][8];
