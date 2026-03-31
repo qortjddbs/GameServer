@@ -2,6 +2,7 @@
 #include <iostream>
 #include <WS2tcpip.h>
 #include <conio.h>
+#include <unordered_map>
 
 #define UP 72
 #define DOWN 80
@@ -26,11 +27,15 @@ struct PosPacket {
 	int x, y;
 };
 #pragma pack(pop)		// 원래 설정으로 복귀
+struct PlayerInfo {
+	int x, y;
+};
+std::unordered_map<int, PlayerInfo> g_players;		// 플레이어 ID와 위치를 저장하는 맵
 
 PosPacket g_c_pos_packet{};
 KeyPacket g_c_key_packet{};
-WSABUF g_recv_wsa_buf{ sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet)};
-WSABUF g_send_wsa_buf{ sizeof(PosPacket), reinterpret_cast<char*>(&g_c_pos_packet)};
+WSABUF g_recv_wsa_buf{ sizeof(PosPacket), reinterpret_cast<char*>(&g_c_pos_packet)};
+WSABUF g_send_wsa_buf{ sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet)};
 WSAOVERLAPPED g_recv_overlapped{}, g_send_overlapped{};
 SOCKET g_s_socket;
 
@@ -74,18 +79,20 @@ void CALLBACK send_callback(DWORD, DWORD, LPWSAOVERLAPPED, DWORD);
 
 void send_to_server() {
 	std::wcout << L"방향키를 입력하세요!";
-	int key = _getch();
-	if (key == 224) {		// 서버창에 두번 뜨길래 버퍼 비워주기
-		key = _getch();
-	}
-	g_c_key_packet = { key };
-	g_send_wsa_buf = { sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet) };
-	DWORD sent_size = 0;
-	int result = WSASend(g_s_socket, &g_send_wsa_buf, 1, &sent_size, 0, &g_send_overlapped, send_callback);
-	if (result == SOCKET_ERROR) {
-		error_display(L"데이터 전송 실패", WSAGetLastError());
-		WSACleanup();
-		exit(1);
+	if (_kbhit()) {
+		int key = _getch();
+		if (key == 224) {
+			key = _getch();
+		}
+		g_c_key_packet = { key };
+		g_send_wsa_buf = { sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet) };
+		DWORD sent_size = 0;
+		int result = WSASend(g_s_socket, &g_send_wsa_buf, 1, &sent_size, 0, &g_send_overlapped, send_callback);
+		if (result == SOCKET_ERROR) {
+			error_display(L"데이터 전송 실패", WSAGetLastError());
+			WSACleanup();
+			exit(1);
+		}
 	}
 }
 
@@ -95,23 +102,40 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 		error_display(L"데이터 수신 실패", WSAGetLastError());
 		exit(1);
 	}
-	if ((current_px + current_py) % 2 == 0) {
-		board[current_py][current_px] = 'W';
-	}
-	else {
-		board[current_py][current_px] = 'B';
-	}
+	int id = g_c_pos_packet.id;
+	g_players[id].x = g_c_pos_packet.x;
+	g_players[id].y = g_c_pos_packet.y;
 
-	current_px = g_c_pos_packet.x;
-	current_py = g_c_pos_packet.y;
-	board[current_py][current_px] = '*';
+	////if ((current_px + current_py) % 2 == 0) {
+	////	board[current_py][current_px] = 'W';
+	////}
+	////else {
+	////	board[current_py][current_px] = 'B';
+	////}
+
+	////current_px = g_c_pos_packet.x;
+	////current_py = g_c_pos_packet.y;
+	////board[current_py][current_px] = '*';
 
 	system("cls");
-	std::cout << "서버로부터 위치 패킷 수신! (x: " << g_c_pos_packet.x << ", y: " << g_c_pos_packet.y << ")" << std::endl;
-	std::cout << "(" << current_px << ", " << current_py << ")" << std::endl;
+	//std::cout << "서버로부터 위치 패킷 수신! (x: " << g_c_pos_packet.x << ", y: " << g_c_pos_packet.y << ")" << std::endl;
+	//std::cout << "(" << current_px << ", " << current_py << ")" << std::endl;
+	char board[8][8];
+	InitBoard(board);
+
+	for (const auto& pair : g_players) {
+		int id = pair.first;
+		int px = pair.second.x;
+		int py = pair.second.y;
+
+		char avatar = (id >= 1 && id <= 9) ? ('0' + id) : '*';		// ID가 1~9면 숫자로, 아니면 *로 표시
+		board[py][px] = avatar;
+	}
 	PrintBoard(board);
 
-	send_to_server();
+	DWORD recv_flag = 0;
+	ZeroMemory(&g_recv_overlapped, sizeof(g_recv_overlapped));
+	WSARecv(g_s_socket, &g_recv_wsa_buf, 1, nullptr, &recv_flag, &g_recv_overlapped, recv_callback);
 }
 
 void CALLBACK send_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPED overlapped, DWORD flags)
@@ -120,14 +144,24 @@ void CALLBACK send_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 		error_display(L"데이터 전송 실패", WSAGetLastError());
 		return;
 	}
-	g_recv_wsa_buf = { sizeof(PosPacket), reinterpret_cast<char*>(&g_c_pos_packet) };
-	DWORD recv_flag = 0;
-	ZeroMemory(&g_recv_overlapped, sizeof(g_recv_overlapped));
-	int result = WSARecv(g_s_socket, &g_recv_wsa_buf, 1, nullptr, &recv_flag, &g_recv_overlapped, recv_callback);
-	if (result == SOCKET_ERROR) {
-		int err_no = WSAGetLastError();
-		if (err_no != WSA_IO_PENDING) {		// 비동기 작업이 아직 완료되지 않았다는 뜻, 이 경우는 에러가 아님
-			error_display(L"데이터 수신 실패", WSAGetLastError());
+
+}
+
+void InputKey() {
+	if (_kbhit()) {
+		int key = _getch();
+		if (key == 224) {
+			key = _getch();
+		}
+		g_c_key_packet = { key };
+		g_send_wsa_buf = { sizeof(KeyPacket), reinterpret_cast<char*>(&g_c_key_packet) };
+
+		ZeroMemory(&g_send_overlapped, sizeof(g_send_overlapped));
+		DWORD sent_size = 0;
+		int result = WSASend(g_s_socket, &g_send_wsa_buf, 1, &sent_size, 0, &g_send_overlapped, send_callback);
+		if (result == SOCKET_ERROR) {
+			error_display(L"데이터 전송 실패", WSAGetLastError());
+			WSACleanup();
 			exit(1);
 		}
 	}
@@ -155,14 +189,17 @@ int main(void) {
 		return 1;
 	}
 
-	InitBoard(board);
-	board[current_px][current_py] = '*';
-	PrintBoard(board);
-
-	send_to_server();
+	DWORD recv_flag = 0;
+	ZeroMemory(&g_recv_overlapped, sizeof(g_recv_overlapped));
+	WSARecv(g_s_socket, &g_recv_wsa_buf, 1, nullptr, &recv_flag, &g_recv_overlapped, recv_callback);
 
 	for (;;) {
-		SleepEx(0, TRUE);
+		InputKey();
+
+		//system("cls");
+		//PrintBoard(board);
+
+		SleepEx(10, TRUE);		// 10ms 동안 alertable 상태로 대기 (이때 콜백 함수가 실행될 수 있음)
 	}
 	WSACleanup();
 }
