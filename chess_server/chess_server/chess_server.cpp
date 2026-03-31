@@ -12,9 +12,6 @@
 constexpr short SERVER_PORT = 3000;		// 서버 포트 번호
 constexpr int BUFFER_SIZE = 4096;			// 버퍼 크기
 
-int px = 3;
-int py = 3;
-
 #pragma pack(push, 1)
 struct KeyPacket {
 	int key;
@@ -115,24 +112,24 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	switch (key) {
 	case UP: {
 		std::wcout << L"UP키 입력" << std::endl;
-		if (py > 0) py--;
+		if (g_clients[id].py > 0) g_clients[id].py--;
 		break;
 		}
 
 	case DOWN: {
 		std::wcout << L"DOWN키 입력" << std::endl;
-		if (py < 7) py++;
+		if (g_clients[id].py < 7) g_clients[id].py++;
 		break;
 		}
 
 	case RIGHT: {
 		std::wcout << L"RIGHT키 입력" << std::endl;
-		if (px < 7) px++; break;
+		if (g_clients[id].px < 7) g_clients[id].px++; break;
 		}
 
 	case LEFT: {
 		std::wcout << L"LEFT키 입력" << std::endl;
-		if (px > 0) px--;
+		if (g_clients[id].px > 0) g_clients[id].px--;
 		break;
 		}
 	}
@@ -140,7 +137,7 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	for (auto& pair : g_clients) {
 		SOCKET target_socket = pair.second.socket;
 		EXP_OVER* ex_over = new EXP_OVER(id, g_clients[id].px, g_clients[id].py);
-		std::wcout << L"현재 좌표 : (" << px << ", " << py << ")" << std::endl;
+		std::wcout << L"현재 좌표 : (" << g_clients[id].px << ", " << g_clients[id].py << ")" << std::endl;
 		int result = WSASend(target_socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
 		if (result == SOCKET_ERROR) {
 			error_display(L"데이터 전송 실패", WSAGetLastError());

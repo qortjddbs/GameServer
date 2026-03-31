@@ -22,6 +22,7 @@ struct KeyPacket {
 };
 
 struct PosPacket {
+	int id;
 	int x, y;
 };
 #pragma pack(pop)		// 원래 설정으로 복귀
