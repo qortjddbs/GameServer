@@ -19,7 +19,7 @@ WSABUF g_send_wsa_buf{ BUFFER_SIZE, g_send_buffer };
 WSAOVERLAPPED g_recv_overlapped{}, g_send_overlapped{};
 SOCKET g_s_socket;
 
-
+#pragma pack(push, 1)
 class PACKET {
 public:
     unsigned char m_size;
@@ -31,6 +31,7 @@ public:
         strcpy_s(m_buf, mess);
     }
 };
+#pragma pack(pop)
 
 void error_display(const wchar_t* msg, int err_no)
 {
@@ -145,9 +146,10 @@ int main()
                         std::string message = playerInput.toAnsiString();
                         playerInput.clear();
 
+                        PACKET send_packet(0, const_cast<char*>(message.c_str()));
 
-                        g_send_wsa_buf.len = message.size() + 1;
-                        memcpy(g_send_wsa_buf.buf, message.c_str(), g_send_wsa_buf.len);
+                        g_send_wsa_buf.len = send_packet.m_size;
+                        memcpy(g_send_wsa_buf.buf, &send_packet, g_send_wsa_buf.len);
                         ZeroMemory(&g_send_overlapped, sizeof(g_send_overlapped));
                         DWORD sent_size = 0;
                         int result = WSASend(g_s_socket, &g_send_wsa_buf, 1, &sent_size, 0, &g_send_overlapped, send_callback);
