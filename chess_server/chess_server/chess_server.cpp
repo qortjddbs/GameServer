@@ -112,24 +112,25 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	switch (key) {
 	case UP: {
 		std::wcout << L"UP키 입력" << std::endl;
-		if (g_clients[id].py > 0 && (g_clients[id].py - 1 == 'W' || g_clients[id].py - 1 == 'B')) g_clients[id].py--;
+		if (g_clients[id].py > 0) g_clients[id].py--;
 		break;
 		}
 
 	case DOWN: {
 		std::wcout << L"DOWN키 입력" << std::endl;
-		if (g_clients[id].py < 7 && (g_clients[id].py + 1 == 'W' || g_clients[id].py + 1 == 'B')) g_clients[id].py++;
+		if (g_clients[id].py < 7) g_clients[id].py++;
 		break;
 		}
 
 	case RIGHT: {
 		std::wcout << L"RIGHT키 입력" << std::endl;
-		if (g_clients[id].px < 7 && (g_clients[id].px + 1 == 'W' || g_clients[id].px + 1 == 'B')) g_clients[id].px++; break;
+		if (g_clients[id].px < 7) g_clients[id].px++; 
+		break;
 		}
 
 	case LEFT: {
 		std::wcout << L"LEFT키 입력" << std::endl;
-		if (g_clients[id].px > 0 && (g_clients[id].px - 1 == 'W' || g_clients[id].px - 1 == 'B')) g_clients[id].px--;
+		if (g_clients[id].px > 0) g_clients[id].px--;
 		break;
 		}
 	}
