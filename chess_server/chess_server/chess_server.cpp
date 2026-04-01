@@ -112,24 +112,24 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	switch (key) {
 	case UP: {
 		std::wcout << L"UP키 입력" << std::endl;
-		if (g_clients[id].py > 0) g_clients[id].py--;
+		if (g_clients[id].py > 0 && (g_clients[id].py - 1 == 'W' || g_clients[id].py - 1 == 'B')) g_clients[id].py--;
 		break;
 		}
 
 	case DOWN: {
 		std::wcout << L"DOWN키 입력" << std::endl;
-		if (g_clients[id].py < 7) g_clients[id].py++;
+		if (g_clients[id].py < 7 && (g_clients[id].py + 1 == 'W' || g_clients[id].py + 1 == 'B')) g_clients[id].py++;
 		break;
 		}
 
 	case RIGHT: {
 		std::wcout << L"RIGHT키 입력" << std::endl;
-		if (g_clients[id].px < 7) g_clients[id].px++; break;
+		if (g_clients[id].px < 7 && (g_clients[id].px + 1 == 'W' || g_clients[id].px + 1 == 'B')) g_clients[id].px++; break;
 		}
 
 	case LEFT: {
 		std::wcout << L"LEFT키 입력" << std::endl;
-		if (g_clients[id].px > 0) g_clients[id].px--;
+		if (g_clients[id].px > 0 && (g_clients[id].px - 1 == 'W' || g_clients[id].px - 1 == 'B')) g_clients[id].px--;
 		break;
 		}
 	}
@@ -189,6 +189,20 @@ int main() {
 
 		g_clients.try_emplace(client_num, client_num, c_socket);
 		g_clients[client_num].do_recv();
+
+		// 새로 들어온 유저에게 기존 유저들의 위치 전송
+		for (const auto& pair : g_clients) {
+			if (pair.first != client_num) {
+				EXP_OVER* ex_over = new EXP_OVER(pair.first, pair.second.px, pair.second.py);
+				WSASend(c_socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
+			}
+		}
+
+		// 기존 유저들에게 새로 들어온 유저의 위치 전송
+		for (const auto& pair : g_clients) {
+			EXP_OVER* ex_over = new EXP_OVER(client_num, g_clients[client_num].px, g_clients[client_num].py);
+			WSASend(c_socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
+		}
 	}
 	WSACleanup();
 }
