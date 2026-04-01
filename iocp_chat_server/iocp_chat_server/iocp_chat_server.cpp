@@ -133,12 +133,27 @@ int main()
 		DWORD num_bytes;
 		ULONG_PTR key;
 		LPOVERLAPPED over;
-		GetQueuedCompletionStatus(h_iocp, &num_bytes, &key, &over, INFINITE);		// over에서 내용 보관
+		BOOL result = GetQueuedCompletionStatus(h_iocp, &num_bytes, &key, &over, INFINITE);		// over에서 내용 보관 + 반환값 여부 판단
 		if (over == nullptr) {
 			error_display(L"GQCS Error: ", WSAGetLastError());
 			continue;
 		}
 		EXP_OVER* exp_over = reinterpret_cast<EXP_OVER*>(over);
+		int client_id = static_cast<int>(key);
+		if (result == FALSE || (num_bytes == 0 && exp_over->m_iotype == IO_RECV)) {
+			cout << "Client[" << client_id << "] disconnected." << endl;
+
+			if (clients.count(client_id) > 0) {
+				clients.erase(client_id);
+			}
+
+			if (exp_over->m_iotype == IO_SEND) {
+				delete exp_over;
+			}
+
+			continue;
+		}
+
 		switch (exp_over->m_iotype) {
 		case IO_ACCEPT:
 			client_num++;
