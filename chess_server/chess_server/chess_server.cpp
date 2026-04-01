@@ -197,18 +197,18 @@ int main() {
 		g_clients.try_emplace(client_num, client_num, c_socket);
 		g_clients[client_num].do_recv();
 
-		// 새로 들어온 유저에게 기존 유저들의 위치 전송
+		// 새로 들어온 유저에게 기존 유저들의 위치 전송 (ok)
 		for (const auto& pair : g_clients) {
-			if (pair.first != client_num) {
+			if (pair.first != client_num) {		// 지금 막 들어온 클라가 아니라면 정보 전송
 				EXP_OVER* ex_over = new EXP_OVER(pair.first, pair.second.px, pair.second.py);
 				WSASend(c_socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
 			}
 		}
 
-		// 기존 유저들에게 새로 들어온 유저의 위치 전송
+		// 기존 유저들에게 새로 들어온 유저의 위치 전송 (수정 필요)
 		for (const auto& pair : g_clients) {
 			EXP_OVER* ex_over = new EXP_OVER(client_num, g_clients[client_num].px, g_clients[client_num].py);
-			WSASend(c_socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
+			WSASend(pair.second.socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
 		}
 	}
 	WSACleanup();
