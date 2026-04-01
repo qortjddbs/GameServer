@@ -62,6 +62,8 @@ public:
 		DWORD recv_flag = 0;
 		memset(&recv_over.m_over, 0, sizeof(recv_over.m_over));
 
+		recv_over.m_iotype = IO_RECV;
+
 		recv_over.m_wsa.buf = recv_over.m_buff + m_prev_recv;
 		recv_over.m_wsa.len = BUF_SIZE - m_prev_recv;
 
@@ -155,7 +157,7 @@ int main()
 			char* packet_start = clients[client_id].recv_over.m_buff;
 
 			while (remain_data > 0) {
-				int packet_size = packet_start[0];		// 패킷의 첫 번째 바이트는 크기 정보를 갖고있음
+				int packet_size = static_cast<unsigned char>(packet_start[0]);		// 패킷의 첫 번째 바이트는 크기 정보를 갖고있음
 
 				if (packet_size == 0 || packet_size > remain_data) break;		// 더 받을 데이터가 있다면 받고오기
 
