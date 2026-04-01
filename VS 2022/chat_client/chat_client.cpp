@@ -10,7 +10,7 @@
 
 const char* SERVER_IP = "25.7.6.204";
 constexpr short SERVER_PORT = 3500;
-constexpr int BUFFER_SIZE = 4096;
+constexpr int BUFFER_SIZE = 200;
 
 char g_recv_buffer[BUFFER_SIZE];
 char g_send_buffer[BUFFER_SIZE];
