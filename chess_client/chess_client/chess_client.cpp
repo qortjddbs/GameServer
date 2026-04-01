@@ -27,6 +27,7 @@ struct PosPacket {
 	int x, y;
 };
 #pragma pack(pop)		// 원래 설정으로 복귀
+
 struct PlayerInfo {
 	int x, y;
 };
@@ -102,24 +103,20 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 		error_display(L"데이터 수신 실패", WSAGetLastError());
 		exit(1);
 	}
+
 	int id = g_c_pos_packet.id;
-	g_players[id].x = g_c_pos_packet.x;
-	g_players[id].y = g_c_pos_packet.y;
+	int px = g_c_pos_packet.x;
+	int py = g_c_pos_packet.y;
 
-	////if ((current_px + current_py) % 2 == 0) {
-	////	board[current_py][current_px] = 'W';
-	////}
-	////else {
-	////	board[current_py][current_px] = 'B';
-	////}
-
-	////current_px = g_c_pos_packet.x;
-	////current_py = g_c_pos_packet.y;
-	////board[current_py][current_px] = '*';
+	if (px == -1 && py == -1) {
+		g_players.erase(id);
+	}
+	else {
+		g_players[id].x = px;
+		g_players[id].y = py;
+	}
 
 	system("cls");
-	//std::cout << "서버로부터 위치 패킷 수신! (x: " << g_c_pos_packet.x << ", y: " << g_c_pos_packet.y << ")" << std::endl;
-	//std::cout << "(" << current_px << ", " << current_py << ")" << std::endl;
 	char board[8][8];
 	InitBoard(board);
 
@@ -128,9 +125,10 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 		int px = pair.second.x;
 		int py = pair.second.y;
 
-		char avatar = (id >= 1 && id <= 9) ? ('0' + id) : '*';		// ID가 1~9면 숫자로, 아니면 *로 표시
+		char avatar = (id >= 1 && id <= 9) ? ('0' + id) : '*';
 		board[py][px] = avatar;
 	}
+
 	PrintBoard(board);
 
 	DWORD recv_flag = 0;
@@ -195,10 +193,6 @@ int main(void) {
 
 	for (;;) {
 		InputKey();
-
-		//system("cls");
-		//PrintBoard(board);
-
 		SleepEx(10, TRUE);		// 10ms 동안 alertable 상태로 대기 (이때 콜백 함수가 실행될 수 있음)
 	}
 	WSACleanup();
