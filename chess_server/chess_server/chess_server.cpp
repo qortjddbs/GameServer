@@ -104,6 +104,12 @@ void CALLBACK recv_callback(DWORD error, DWORD bytes_transferred, LPWSAOVERLAPPE
 	if (error != 0) {
 		std::wcout << id << L"번 클라이언트와의 연결이 끊어졌습니다. \n";
 		g_clients.erase(id);
+
+		for (const auto& pair : g_clients) {
+			SOCKET target_socket = pair.second.socket;
+			EXP_OVER* ex_over = new EXP_OVER(id, -1, -1);
+			WSASend(target_socket, &ex_over->wsa_buf, 1, nullptr, 0, &ex_over->wsa_over, send_callback);
+		}
 		return;
 	}
 
