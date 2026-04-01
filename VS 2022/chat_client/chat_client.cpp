@@ -8,7 +8,7 @@
 #include <WS2tcpip.h>
 #pragma comment(lib, "ws2_32.lib")
 
-const char* SERVER_IP = "127.0.0.1";
+const char* SERVER_IP = "25.7.6.204";
 constexpr short SERVER_PORT = 3500;
 constexpr int BUFFER_SIZE = 4096;
 
