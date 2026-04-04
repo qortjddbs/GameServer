@@ -269,6 +269,22 @@ int main()
 			int player_index = static_cast<int>(key);
 			cout << "Client[" << player_index << "] sent a message." << endl;
 			SESSION& cl = clients[player_index];
+
+			if (num_bytes == 0) {
+				cout << "Client[" << player_index << "] Disconnected.\n";
+				cl.m_is_connected = false;
+				
+				for (auto& other : clients)
+					if (true == other.m_is_connected)
+						other.send_remove_player(player_index);
+
+				closesocket(cl.m_client);
+				cl.m_client = INVALID_SOCKET;
+
+				continue;
+			}
+
+
 			unsigned char* p = reinterpret_cast<unsigned char *>(exp_over->m_buff);
 			int data_size = num_bytes + cl.m_prev_recv;
 			while (data_size > 0) {
