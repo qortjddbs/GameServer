@@ -2,13 +2,18 @@
 #include <WS2tcpip.h>
 #include <array>
 #include <MSWSock.h>
+#include <thread>
+#include <vector>
 #include "protocol.h"
+#include <tbb/concurrent_unordered_map.h>
 
 #pragma comment(lib, "MSWSock.lib")
 #pragma comment(lib, "WS2_32.lib")
 using namespace std;
 
 constexpr int BUF_SIZE = 200;
+
+std::atomic<int> player_index = 0;
 
 enum IOType { IO_SEND, IO_RECV, IO_ACCEPT };
 
@@ -17,6 +22,7 @@ public:
 	WSAOVERLAPPED m_over;
 	IOType  m_iotype;
 	WSABUF	m_wsa;
+	SOCKET  m_client_socket;
 	char  m_buff[BUF_SIZE];
 	EXP_OVER()
 	{
@@ -47,19 +53,24 @@ void error_display(const wchar_t* msg, int err_no)
 	LocalFree(lpMsgBuf);
 }
 
+enum CL_STATE { CS_CONNECT, CS_PLAYING, CS_LOGOUT };
+
 class SESSION {
 public:
 	SOCKET m_client;
 	int m_id;
-	bool m_is_connected;
+	CL_STATE m_state;
 	EXP_OVER m_recv_over;
 	int m_prev_recv;
 	char m_username[MAX_NAME_LEN];
 	short m_x, m_y;
+
 	SESSION() {
-		m_is_connected = false;
-		m_id = 999;
-		m_client = INVALID_SOCKET;
+		std::cout << "SESSION Creation Error!\n";	
+		exit(-1);
+	}
+	SESSION(SOCKET s, int id) : m_client(s), m_id(id) {
+		m_state = CS_CONNECT;
 		m_recv_over.m_iotype = IO_RECV;
 		m_x = 0; 		m_y = 0;
 		m_prev_recv = 0;
@@ -114,7 +125,8 @@ public:
 	void process_packet(unsigned char* p);
 };
 
-std::array<SESSION, MAX_PLAYERS> clients;
+tbb::concurrent_unordered_map<int, 
+	std::atomic<std::shared_ptr<SESSION>>> clients;
 
 void SESSION::send_add_player(int player_id)
 {
@@ -137,12 +149,6 @@ void SESSION::process_packet(unsigned char* p)
 		C2S_Login* packet = reinterpret_cast<C2S_Login*>(p);
 		strncpy_s(m_username, packet->username, MAX_NAME_LEN);
 		cout << "Player[" << m_id << "] logged in as " << m_username << endl;
-		for (auto& other : clients) {
-			if (false == other.m_is_connected) continue;
-			if (other.m_id == m_id) continue;
-			other.send_add_player(m_id);
-			send_add_player(other.m_id);	
-		}
 		send_avatar_info();
 	}
 				  break;
@@ -191,6 +197,104 @@ void send_login_fail(SOCKET client, const char* message)
 	WSASend(client, &wsa_buf, 1, 0, 0, nullptr, nullptr);
 }
 
+void worker_thread()
+{
+	for (;;) {
+		DWORD num_bytes;
+		ULONG_PTR key;
+		LPOVERLAPPED over;
+		GetQueuedCompletionStatus(h_iocp, &num_bytes, &key, &over, INFINITE);
+		if (over == nullptr) {
+			error_display(L"GQCS Errror: ", WSAGetLastError());
+			if (key == -1) {
+				exit(-1);
+			}
+			std::cout << "client[" << key << "] Disconnected.\n";
+			std::shared_ptr<SESSION> cl = clients[key].load();
+			if (nullptr != cl) {
+				cl->m_state = CS_LOGOUT;
+				for (auto& other : clients) {
+					std::shared_ptr<SESSION> o = other.second.load();
+					if (nullptr == o) continue;
+					if (CS_PLAYING == o->m_state)
+						o->send_remove_player(key);
+				}
+				closesocket(cl->m_client);
+				cl->m_client = INVALID_SOCKET;
+			}
+			clients[key].store(nullptr);
+			continue;
+		}
+		EXP_OVER* exp_over = reinterpret_cast<EXP_OVER*>(over);
+		switch (exp_over->m_iotype) {
+		case IO_ACCEPT:
+			cout << "Client connected." << endl;
+			if (MAX_PLAYERS <= clients.size()) {
+				cout << "No more player can be accepted." << endl;
+				send_login_fail(exp_over->m_client_socket, "Server is full.");
+				closesocket(exp_over->m_client_socket);
+			}
+			int my_id = player_index++;
+
+			else {
+				CreateIoCompletionPort((HANDLE)client_socket, h_iocp, player_index, 0);
+				clients[player_index].m_is_connected = true;
+				clients[player_index].m_client = client_socket;
+				clients[player_index].m_x = 0;
+				clients[player_index].m_y = 0;
+				clients[player_index].m_id = player_index;
+				clients[player_index].send_login_success();
+				clients[player_index].m_prev_recv = 0;
+
+				for (auto& other : clients) {
+					if (false == other.m_is_connected) continue;
+					if (other.m_id == player_index) continue;
+					other.send_add_player(player_index);
+					clients[player_index].send_add_player(other.m_id);
+				}
+
+				clients[player_index].do_recv();
+			}
+			client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
+			AcceptEx(server, client_socket, &accept_over.m_buff, 0,
+				sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
+				NULL, &accept_over.m_over);
+			break;
+		case IO_RECV:
+		{
+			int player_index = static_cast<int>(key);
+			cout << "Client[" << player_index << "] sent a message." << endl;
+			SESSION& cl = clients[player_index];
+			unsigned char* p = reinterpret_cast<unsigned char*>(exp_over->m_buff);
+			int data_size = num_bytes + cl.m_prev_recv;
+			while (data_size > 0) {
+				int packet_size = p[0];
+				if (packet_size > data_size) break;
+				cl.process_packet(p);
+				p += packet_size;
+				data_size -= packet_size;
+			}
+			if (data_size > 0) {
+				memmove(cl.m_recv_over.m_buff, p, data_size);
+				cl.m_prev_recv = data_size;
+			}
+			cl.do_recv();
+		}
+		break;
+		case IO_SEND: {
+			cout << "Message sent. to client[" << key << "]\n";
+			EXP_OVER* o = reinterpret_cast<EXP_OVER*>(over);
+			delete o;
+		}
+					break;
+		default:
+			cout << "Unknown IO type." << endl;
+			exit(-1);
+			break;
+		}
+	}
+}
+
 int main()
 {
 	WSADATA WSAData;
@@ -213,106 +317,14 @@ int main()
 		sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
 		NULL, &accept_over.m_over);
 
-	for (int player_index = 0;;) {
-		DWORD num_bytes;
-		ULONG_PTR key;
-		LPOVERLAPPED over;
-		GetQueuedCompletionStatus(h_iocp, &num_bytes, &key, &over, INFINITE);
-		if (over == nullptr) {
-			error_display(L"GQCS Errror: ", WSAGetLastError());
-			if (key == -1) {
-				exit(-1);
-			}
-			std::cout << "client[" << key << "] Disconnected.\n";
-			clients[key].m_is_connected = false;
-			for (auto& cl : clients)
-				if (true == cl.m_is_connected)
-					cl.send_remove_player(key);
-			closesocket(clients[key].m_client);
-			clients[key].m_client = INVALID_SOCKET;
-			continue;
-		}
-		EXP_OVER* exp_over = reinterpret_cast<EXP_OVER*>(over);
-		switch (exp_over->m_iotype) {
-		case IO_ACCEPT:
-			cout << "Client connected." << endl;
-			player_index = -1;
-			for (int i = 0; i < MAX_PLAYERS; ++i)
-				if (!clients[i].m_is_connected) {
-					player_index = i;
-					break;
-				}
-			if (-1 == player_index) {
-				cout << "No more player can be accepted." << endl;
-				send_login_fail(client_socket, "Server is full.");
-				closesocket(client_socket);
-			}
-			else {
-				CreateIoCompletionPort((HANDLE)client_socket, h_iocp, player_index, 0);
-				clients[player_index].m_is_connected = true;
-				clients[player_index].m_client = client_socket;
-				clients[player_index].m_x = 0;
-				clients[player_index].m_y = 0;
-				clients[player_index].m_id = player_index;
-				clients[player_index].send_login_success();
-				clients[player_index].m_prev_recv = 0;
+	vector <thread> worker_threads;
+	int num_threads = thread::hardware_concurrency();
 
-				clients[player_index].do_recv();
-			}
-			client_socket = WSASocket(AF_INET, SOCK_STREAM, 0, NULL, 0, WSA_FLAG_OVERLAPPED);
-			AcceptEx(server, client_socket, &accept_over.m_buff, 0,
-				sizeof(SOCKADDR_IN) + 16, sizeof(SOCKADDR_IN) + 16,
-				NULL, &accept_over.m_over);
-			break;
-		case IO_RECV:
-		{
-			int player_index = static_cast<int>(key);
-			cout << "Client[" << player_index << "] sent a message." << endl;
-			SESSION& cl = clients[player_index];
+	for (int i = 0; i < num_threads; ++i)
+		worker_threads.emplace_back(worker_thread);
+	for (auto &th : worker_threads)
+		th.join();
 
-			if (num_bytes == 0) {
-				cout << "Client[" << player_index << "] Disconnected.\n";
-				cl.m_is_connected = false;
-				
-				for (auto& other : clients)
-					if (true == other.m_is_connected)
-						other.send_remove_player(player_index);
-
-				closesocket(cl.m_client);
-				cl.m_client = INVALID_SOCKET;
-
-				continue;
-			}
-
-
-			unsigned char* p = reinterpret_cast<unsigned char *>(exp_over->m_buff);
-			int data_size = num_bytes + cl.m_prev_recv;
-			while (data_size > 0) {
-				int packet_size = p[0];
-				if (packet_size > data_size) break;
-				cl.process_packet(p);
-				p += packet_size;
-				data_size -= packet_size;
-			}
-			if (data_size > 0) {
-				memmove(cl.m_recv_over.m_buff, p, data_size);
-				cl.m_prev_recv = data_size;
-			}
-			cl.do_recv();
-		}
-		break;
-		case IO_SEND: {
-			cout << "Message sent. to client[" << key << "]\n";
-			EXP_OVER* o = reinterpret_cast<EXP_OVER*>(over);
-			delete o;
-		}
-		break;
-		default:
-			cout << "Unknown IO type." << endl;
-			exit(-1);
-			break;
-		}
-	}
 	closesocket(server);
 	WSACleanup();
 }
