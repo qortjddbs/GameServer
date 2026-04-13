@@ -1,5 +1,4 @@
 #include <iostream>
-#include <array>
 #include <random>
 #include <thread>
 #include <vector>

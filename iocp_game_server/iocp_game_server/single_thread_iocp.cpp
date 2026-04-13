@@ -1,8 +1,7 @@
 #include <iostream>
-#include <WS2tcpip.h>
-#include <array>
-#include <MSWSock.h>
 #include <random>
+#include <WS2tcpip.h>
+#include <MSWSock.h>
 #include "protocol.h"
 #include <tbb/concurrent_unordered_map.h>
 
