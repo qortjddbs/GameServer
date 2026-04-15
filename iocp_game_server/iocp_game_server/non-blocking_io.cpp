@@ -223,8 +223,8 @@ int main()
 			auto new_session = std::make_shared<SESSION>();
 			new_session->m_state.store(ST_ALLOC);
 			new_session->m_client = client_socket;
-			new_session->m_x = uid_x(dre);
-			new_session->m_y = uid_y(dre);
+			new_session->m_x = 0;
+			new_session->m_y = 0;
 			new_session->m_id = new_id;
 			new_session->m_prev_recv = 0;
 
