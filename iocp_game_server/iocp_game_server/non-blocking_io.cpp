@@ -223,8 +223,8 @@ int main()
 			auto new_session = std::make_shared<SESSION>();
 			new_session->m_state.store(ST_ALLOC);
 			new_session->m_client = client_socket;
-			new_session->m_x = 0;
-			new_session->m_y = 0;
+			new_session->m_x = uid_x(dre);
+			new_session->m_y = uid_y(dre);
 			new_session->m_id = new_id;
 			new_session->m_prev_recv = 0;
 
@@ -256,7 +256,7 @@ int main()
 			else if (ret == SOCKET_ERROR) {
 				int err = WSAGetLastError();
 				if (err != WSAEWOULDBLOCK) {
-					cout << "Client[" << cl->m_id << "] Disconnected with error: " << err << endl;
+					cout << "Client[" << cl->m_id << "] Disconnected" << endl;
 					disconnect_list.push_back(pair.first);
 				}
 			} else if (ret == 0) {
@@ -282,6 +282,7 @@ int main()
 				it->second.store(nullptr);
 			}
 		}
+		disconnect_list.clear();
 	}
 	closesocket(server);
 	WSACleanup();
