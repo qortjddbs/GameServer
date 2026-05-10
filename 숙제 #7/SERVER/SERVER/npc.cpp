@@ -61,8 +61,6 @@ public:
 	WSABUF _wsabuf;
 	char _send_buf[BUF_SIZE];
 	COMP_TYPE _comp_type;
-
-	// int _ai_target_obj;
 	OVER_EXP()
 	{
 		_wsabuf.len = BUF_SIZE;
@@ -401,7 +399,7 @@ void process_packet(int c_id, char* packet)
 		strcpy_s(clients[c_id]->_name, p->username);
 
 		{
-			lock_guard<mutex> ll{ clients[c_id]->_s_lock };	// lock local (지역 잠그기)
+			lock_guard<mutex> ll{ clients[c_id]->_s_lock };	// lock local (지역 잠그기) - 닫는 괄호 만나면 자동으로 락 해제
 			clients[c_id]->x = rand() % WORLD_WIDTH;
 			clients[c_id]->y = rand() % WORLD_HEIGHT;
 			clients[c_id]->_state = ST_INGAME;
@@ -670,49 +668,6 @@ void InitializeNPC()
 	cout << "NPC initialize end.\n";
 }
 
-//void HB_thread ()
-//{
-//	using namespace chrono;
-//
-//	while (true) {
-//		auto start_time = chrono::system_clock::now();
-//		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
-//			if (clients[i]._state != ST_INGAME) continue;
-//			clients[i].heart_beat();
-//		}
-//		auto end_time = chrono::system_clock::now();
-//		auto elapsed = end_time - start_time;
-//		if (elapsed < chrono::milliseconds(MOVE_COOL_TIME)) {
-//			this_thread::sleep_for(chrono::milliseconds(MOVE_COOL_TIME) - elapsed);
-//		}
-//
-//		std::cout << "Elapsed Time : "
-//			<< duration_cast<milliseconds>(elapsed).count()
-//			<< "ms.\n";
-//	}
-//}
-//
-//void ai_thread()
-//{
-//	while (true) {
-//		int elapsed_time = 1000;
-//		auto current_time = system_clock::now();
-//		for (int i = MAX_USER; i < MAX_USER + MAX_NPC; ++i) {
-//			if (clients[i]._state != ST_INGAME) continue;
-//			auto duration = duration_cast<milliseconds>(current_time - clients[i].npc_last_move_time).count();
-//			if (duration >= MOVE_COOL_TIME) {
-//				do_npc_random_move(i);
-//				clients[i].npc_last_move_time = current_time;
-//
-//				if (duration > elapsed_time) elapsed_time++;
-//				else if (duration < elapsed_time) elapsed_time--;
-//
-//			}
-//		}
-//		std::cout << "Elapsed Time : " << elapsed_time << "ms.\n";
-//	}
-//}
-
 void timer_thread()
 {
 	while (true) {
@@ -757,7 +712,7 @@ int main()
 	SOCKADDR_IN server_addr;
 	memset(&server_addr, 0, sizeof(server_addr));
 	server_addr.sin_family = AF_INET;
-	server_addr.sin_port = htons(PORT);	// 3500
+	server_addr.sin_port = htons(PORT);
 	server_addr.sin_addr.S_un.S_addr = INADDR_ANY;
 	::bind(g_s_socket, reinterpret_cast<sockaddr*>(&server_addr), sizeof(server_addr));
 	listen(g_s_socket, SOMAXCONN);
@@ -772,7 +727,7 @@ int main()
 	AcceptEx(g_s_socket, g_c_socket, g_a_over._send_buf, 0, addr_size + 16, addr_size + 16, 0, &g_a_over._over);
 
 	vector <thread> worker_threads;
-	thread ai_th(timer_thread);	// 타이머 전담
+	thread ai_th(timer_thread);
 	int num_threads = std::thread::hardware_concurrency();
 	for (int i = 0; i < num_threads; ++i)
 		worker_threads.emplace_back(worker_thread, h_iocp);
