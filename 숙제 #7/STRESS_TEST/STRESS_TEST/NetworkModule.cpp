@@ -389,10 +389,6 @@ void InitializeNetwork()
 	cout << "접속할 서버의 IP 주소를 입력하세요 (로컬 테스트시 그냥 엔터): ";
 	string input_ip;
 	getline(cin, input_ip);
-
-	input_ip.erase(input_ip.find_last_not_of(" \n\r\t") + 1);
-	input_ip.erase(0, input_ip.find_first_not_of(" \n\r\t"));
-
 	if (!input_ip.empty()) g_server_ip = input_ip;
 
 	for (auto& cl : g_clients) {
