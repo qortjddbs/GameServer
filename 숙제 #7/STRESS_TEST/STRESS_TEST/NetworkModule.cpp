@@ -13,6 +13,7 @@
 #include <queue>
 #include <array>
 #include <memory>
+#include <string>
 
 using namespace std;
 using namespace chrono;
@@ -34,6 +35,8 @@ HANDLE g_hiocp;
 enum OPTYPE { OP_SEND, OP_RECV, OP_DO_MOVE };
 
 high_resolution_clock::time_point last_connect_time;
+
+string g_server_ip = "127.0.0.1";
 
 #pragma pack(push, 1)
 struct PACKET_HEADER {
@@ -305,8 +308,8 @@ void Adjust_Number_Of_Client()
 	ZeroMemory(&ServerAddr, sizeof(SOCKADDR_IN));
 	ServerAddr.sin_family = AF_INET;
 	ServerAddr.sin_port = htons(PORT);
-	ServerAddr.sin_addr.s_addr = inet_addr("127.0.0.1");
 
+	ServerAddr.sin_addr.s_addr = inet_addr(g_server_ip.c_str());
 
 	int Result = WSAConnect(g_clients[num_connections].client_socket, (sockaddr*)&ServerAddr, sizeof(ServerAddr), NULL, NULL, NULL, NULL);
 	if (0 != Result) {
@@ -318,7 +321,7 @@ void Adjust_Number_Of_Client()
 	ZeroMemory(&g_clients[num_connections].recv_over, sizeof(g_clients[num_connections].recv_over));
 	g_clients[num_connections].recv_over.event_type = OP_RECV;
 	g_clients[num_connections].recv_over.wsabuf.buf =
-		reinterpret_cast<CHAR*>(g_clients[num_connections].recv_over.IOCP_buf);
+	reinterpret_cast<CHAR*>(g_clients[num_connections].recv_over.IOCP_buf);
 	g_clients[num_connections].recv_over.wsabuf.len = sizeof(g_clients[num_connections].recv_over.IOCP_buf);
 
 	DWORD recv_flag = 0;
@@ -364,7 +367,7 @@ void Test_Thread()
 			case 0: dy = -1; break;
 			case 1: dy = 1; break;
 			case 2: dx = -1; break;
-			case 3: dx = -1; break;
+			case 3: dx = 1; break;
 			}
 
 			int nx = max(0, min(WORLD_WIDTH - 1, g_clients[i].x + dx));
@@ -383,6 +386,15 @@ void Test_Thread()
 
 void InitializeNetwork()
 {
+	cout << "접속할 서버의 IP 주소를 입력하세요 (로컬 테스트시 그냥 엔터): ";
+	string input_ip;
+	getline(cin, input_ip);
+
+	input_ip.erase(input_ip.find_last_not_of(" \n\r\t") + 1);
+	input_ip.erase(0, input_ip.find_first_not_of(" \n\r\t"));
+
+	if (!input_ip.empty()) g_server_ip = input_ip;
+
 	for (auto& cl : g_clients) {
 		cl.connected = false;
 		cl.id = INVALID_ID;
