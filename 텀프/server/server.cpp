@@ -15,7 +15,7 @@ struct IOContext
 {
 	WSAOVERLAPPED overlapped;
 	WSABUF wsabuf;
-	char buffer[1024];
+	char buffer[1024];		// 실제 데이터 들어있는 곳
 	IO_OP opType;
 	SOCKET acceptSocket;	// 새로 들어올 손님의 소켓을 담아둘 바구니
 
@@ -241,11 +241,41 @@ private:
 		}
 	}
 
-	void ProcessReceive(int id, DWORD bytes) {
-		// 패킷 재조립 구현
+	void ProcessReceive(int sessionId, DWORD bytesTransferred) {
+		// 패킷 재조립 로직
+		auto session = sessions[sessionId];
+		int totalBytes = session->prevRemainBytes + bytesTransferred;
+		int readPos = 0;
+
+		while (true) {
+			if (totalBytes - readPos < 1) break;
+
+			unsigned char packetSize = session->recvContext.buffer[readPos];		
+			// 새롭게 들어온 데이터의 맨 앞 1바이트는 패킷의 크기 정보이므로, 그걸 읽어서 packetSize에 저장
+			if (totalBytes - readPos < packetSize) break;
+			// 더 읽어와야 되니까 일단 보류. 패킷이 완성되지 않았으니 지금은 처리하지 말고 다음에 더 읽어서 완성되면 처리
+
+			OnPacket(sessionId, &session->recvContext.buffer[readPos]);
+			readPos += packetSize;
+			// 패킷 처리했으니까 그만큼 인덱스 뒤로 이동
+		}
+
+		// 더 받아올 데이터가 남았으면
+		int remainBytes = totalBytes - readPos;
+		if (remainBytes > 0) {
+			memmove(session->recvContext.buffer, &session->recvContext.buffer[readPos], remainBytes);
+			// memmove(목적지, 출발지, 크기)
+		}
+		
+		session->prevRemainBytes = remainBytes;
+		DWORD flags = 0;
+		session->recvContext.wsabuf.len = sizeof(session->recvContext.buffer) - remainBytes;
+		session->recvContext.wsabuf.buf = session->recvContext.buffer + remainBytes;
+		WSARecv(session->socket, &session->recvContext.wsabuf, 1, nullptr, &flags, 
+			&session->recvContext.overlapped, nullptr);
 	}
 
-	void OnPacket(int sessionId, char* packet) {						// 온전한 패킷 1개가 완성되면 이 함수로 던져줌
+	void OnPacket(int sessionId, char* packet) {			// 온전한 패킷 1개가 완성되면 이 함수로 던져줌
 		PACKET_TYPE type = reinterpret_cast<C2S_Login*>(packet)->type;
 		// 클라이언트가 어떤 패킷을 보냈든, 구조체의 메모리 맨 앞에는 무조건 크기(size),
 		// 두 번째에는 무조건 타입(type)이 들어있도록 설계했기 때문에,  아무 패킷 구조체(여기서는 제일 만만한 C2S_Login)
