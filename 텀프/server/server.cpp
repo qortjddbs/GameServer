@@ -60,7 +60,7 @@ public:
 	// void*를 안쓰면 패킷 종류만큼 오버로딩해서 생성해야됨.
 	void SendPacket(void* packet) {
 		// 들어온 void*를 unsigned char*로 변환하여 메모리의 맨 앞 1바이트 읽기
-		// -> 아 구조체가 뭔진 몰라도 크기가 xx바이트라고 파악
+		// -> 아 이 구조체가 뭔진 몰라도 크기가 xx바이트라고 파악
 		unsigned char* p = reinterpret_cast<unsigned char*>(packet);
 		IOContext* sendContext = new IOContext(IO_OP::SEND);
 		// OS송신 버퍼 (IOContext->buffer)에 정확히 xx바이트만 복사해 OS로 넘김
@@ -187,18 +187,21 @@ private:
 			// &overlapped : (출력용) 우리가 WSASend/Recv때 넘겨줬던 그 작업 영수증 구조체의 주소를 OS가 다시 돌려줌
 			// INFINITE : 완료된 작업이 큐에 나올 때까지 쓰레드를 무한정 수면(Sleep) 상태로 대기시킴
 
-			// 클라이언트가 게임을 강제 종료하거나 랜선이 뽑히면 bytesTransferred가 0으로 오거나
-			// result가 FALSE로 오는데, 이 경우 해당 유저(completionKey)의 세션을 리셋(Disconnect) 해줌
-			if (!result || bytesTransferred == 0) {
-				if (completionKey != 10000 && completionKey != 0) {
-					Disconnect(static_cast<int>(completionKey));
-				}
-				continue;	// 에러가 났으니 아래 로직은 무시하고 다시 GQCS 수면하러 돌아감
-			}
-
 			// OS는 WSAOVERLAPPED* 껍데기만 돌려주기 때문에, 우리가 원래 정의했던 확장 구조체인
 			// IOContext*로 다시 캐스팅하여 이 작업이 ACCEPT인지, RECV인지, SEND인지 파악
 			IOContext* ioCtx = reinterpret_cast<IOContext*>(overlapped);
+
+			// 클라이언트가 게임을 강제 종료하거나 랜선이 뽑히면 bytesTransferred가 0으로 오거나
+			// result가 FALSE로 오는데, 이 경우 해당 유저(completionKey)의 세션을 리셋(Disconnect) 해줌
+			if (!result || bytesTransferred == 0 && ioCtx->opType != IO_OP::ACCEPT) {
+				if (completionKey != 10000) {
+					Disconnect(static_cast<int>(completionKey));
+					std::cout << "[Disconnect] Player " << completionKey << " left." << std::endl;
+				}
+				if (ioCtx->opType == IO_OP::SEND) delete ioCtx;		// 보내던 중 끊겼으면 메모리 누수 방지 위해 영수증 폐기
+				continue;	// 에러가 났으니 아래 로직은 무시하고 다시 GQCS 수면하러 돌아감
+			}
+
 			int sessionId = static_cast<int>(completionKey);
 
 			switch (ioCtx->opType) {
@@ -271,6 +274,9 @@ private:
 		DWORD flags = 0;
 		session->recvContext.wsabuf.len = sizeof(session->recvContext.buffer) - remainBytes;
 		session->recvContext.wsabuf.buf = session->recvContext.buffer + remainBytes;
+
+		ZeroMemory(&session->recvContext.overlapped, sizeof(WSAOVERLAPPED));
+
 		WSARecv(session->socket, &session->recvContext.wsabuf, 1, nullptr, &flags, 
 			&session->recvContext.overlapped, nullptr);
 	}
@@ -278,8 +284,8 @@ private:
 	void OnPacket(int sessionId, char* packet) {			// 온전한 패킷 1개가 완성되면 이 함수로 던져줌
 		PACKET_TYPE type = reinterpret_cast<C2S_Login*>(packet)->type;
 		// 클라이언트가 어떤 패킷을 보냈든, 구조체의 메모리 맨 앞에는 무조건 크기(size),
-		// 두 번째에는 무조건 타입(type)이 들어있도록 설계했기 때문에,  아무 패킷 구조체(여기서는 제일 만만한 C2S_Login)
-		// 로 포인터를 강제 형변환한 뒤 ->type 을 읽으면, 이 패킷이 어떤 패킷인지 알 수 있음
+		// 두 번째에는 무조건 타입(type)이 들어있도록 설계했기 때문에, 아무 패킷 구조체(여기서는 제일 만만한 C2S_Login) 로
+		// 포인터를 강제 형변환한 뒤 ->type 을 읽으면, 이 패킷이 어떤 패킷인지 알 수 있음
 
 		if (type == C2S_LOGIN) {
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
