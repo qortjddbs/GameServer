@@ -38,7 +38,7 @@ public:
     }
 
     virtual void draw(sf::RenderWindow& window) {
-        // 💡 아직 텍스처(이미지)가 없으므로 SFML 기본 원형 그리기 사용!
+        // 아직 텍스처(이미지)가 없으므로 SFML 기본 원형 그리기 사용!
         // 내 캐릭터는 초록색, 다른 사람은 빨간색 동그라미로 표시
         sf::CircleShape shape(15.0f);
         if (id == g_my_id) shape.setFillColor(sf::Color::Green);
