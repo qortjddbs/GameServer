@@ -4,6 +4,7 @@
 #include <thread>
 #include <mutex>
 #include <vector>
+#include <tbb/concurrent_unordered_map.h>
 #include "protocol_2026.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -85,16 +86,22 @@ class IocpServer
 private:
 	HANDLE hIocp = INVALID_HANDLE_VALUE;
 	SOCKET listenSocket = INVALID_SOCKET;
-	std::vector<std::shared_ptr<Session>> sessions;
+	tbb::concurrent_unordered_map<int, std::shared_ptr<Session>> sessions;
 	std::vector<std::thread> workers;
 
 public:
 	IocpServer() {
-		sessions.resize(MAX_PLAYERS);
-		// reserve와의 차이점 : 크기를 늘리고 안을 채우냐 마냐 (resize는 채움)
+		// 플레이어용 세션 메모리 할당
 		for (int i = 0; i < MAX_PLAYERS; ++i) {
 			sessions[i] = std::make_shared<Session>();
 			sessions[i]->id = i;
+		}
+
+		// NPC용 세션 메모리 할당
+		for (int i = NPC_ID_START; i < NPC_ID_START + NUM_NPCS; ++i) {
+			sessions[i] = std::make_shared<Session>();
+			sessions[i]->id = i;
+			// NPC 초기 좌표 및 스탯 세팅 구현 필요
 		}
 	}
 
