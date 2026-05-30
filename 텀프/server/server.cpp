@@ -5,6 +5,7 @@
 #include <mutex>
 #include <vector>
 #include <tbb/concurrent_unordered_map.h>
+#include <tbb/concurrent_queue.h>
 #include "protocol_2026.h"
 
 #pragma comment(lib, "ws2_32.lib")
@@ -35,11 +36,12 @@ class Session
 {
 public:
 	std::mutex sessionLock;
-	SessionState state = SessionState::FREE;
+	std::atomic<SessionState> state = SessionState::FREE;
+
 	int id = -1;
 	SOCKET socket = INVALID_SOCKET;
-	unsigned int sessionIndex = 0;
-	unsigned int playerNum = 0;
+	unsigned int sessionIndex = 0;		// 물리적 배열 방 번호
+	unsigned int playerNum = 0;			// 이 방을 다녀간 사람 수 (고유 ID용)
 
 	short x = 0, y = 0;
 	int hp = 100, max_hp = 100;
@@ -52,9 +54,15 @@ public:
 
 	void Reset() {		// Reset 함수를 실행하는동안 lock_guard가 자동으로 {}를 잠구고 해제해줌.
 		std::lock_guard<std::mutex> lock(sessionLock);
-		state = SessionState::FREE;
-		socket = INVALID_SOCKET;
+		if (socket != INVALID_SOCKET) {
+			closesocket(socket);
+			socket = INVALID_SOCKET;
+		}
 		prevRemainBytes = 0;
+		memset(name, 0, sizeof(name));
+
+		playerNum++;	// 손님이 바뀔 때마다 세대 번호 증가
+		state.store(SessionState::FREE);
 	}
 
 	// void* -> 이 포인터가 가리키는 구조체가 뭔진 모르겠지만, 일단 메모리 주소만 넘긴다는 뜻
@@ -86,23 +94,45 @@ class IocpServer
 private:
 	HANDLE hIocp = INVALID_HANDLE_VALUE;
 	SOCKET listenSocket = INVALID_SOCKET;
-	tbb::concurrent_unordered_map<int, std::shared_ptr<Session>> sessions;
+	// 메모리 해제가 없으므로 벡터가 가장 빠름 (free-store에 메모리 할당)
+	std::vector<Session*> sessions;
+	// 빈 방 번호표 관리용 안전 바구니
+	tbb::concurrent_queue<int> player_id_pool;
 	std::vector<std::thread> workers;
 
 public:
 	IocpServer() {
+		sessions.resize(MAX_PLAYERS + NUM_NPCS, nullptr);
 		// 플레이어용 세션 메모리 할당
 		for (int i = 0; i < MAX_PLAYERS; ++i) {
-			sessions[i] = std::make_shared<Session>();
-			sessions[i]->id = i;
+			sessions[i] = new Session();
+			sessions[i]->sessionIndex = i;
+			player_id_pool.push(i);
 		}
 
 		// NPC용 세션 메모리 할당
-		for (int i = NPC_ID_START; i < NPC_ID_START + NUM_NPCS; ++i) {
-			sessions[i] = std::make_shared<Session>();
-			sessions[i]->id = i;
-			// NPC 초기 좌표 및 스탯 세팅 구현 필요
+		for (int i = 0; i < NUM_NPCS; ++i) {
+			int real_index = MAX_PLAYERS + i;		// 실제 배열 인덱스
+			int npc_id = NPC_ID_START + i;			// 게임 속 NPC의 ID (100만~)
+
+			sessions[i] = new Session();
+			sessions[i]->sessionIndex = real_index;
+			sessions[i]->id = npc_id;
+			sessions[i]->state.store(SessionState::INGAME);
+			sessions[i]->x = rand() % WORLD_WIDTH;
+			sessions[i]->y = rand() % WORLD_HEIGHT;
 		}
+	}
+
+	// 배열 인덱스 초과를 막는 라우터
+	Session* GetSession(int id) {
+		if (id < MAX_PLAYERS) {
+			return sessions[id];		// 유저는 그대로
+		}
+		else if (id >= NPC_ID_START && id < NPC_ID_START + NUM_NPCS) {
+			return sessions[MAX_PLAYERS + (id - NPC_ID_START)];			// NPC는 100만을 빼서 접근!
+		}
+		return nullptr;
 	}
 
 	bool Initialize() {
@@ -168,17 +198,16 @@ private:
 	}
 
 	int AllocateSession(SOCKET clientSocket) {
-		for (int i = 0; i < MAX_PLAYERS; ++i) {
-			// 방을 확인하고 상태를 바꾸는 찰나의 순간을 잠금
-			// 1번 쓰레드와 2번 쓰레드가 동시에 방을 확인해서 둘 다 빈 방으로 판단할 수 있기 때문
-			std::lock_guard<std::mutex> lock(sessions[i]->sessionLock);
-			if (sessions[i]->state == SessionState::FREE) {
-				sessions[i]->state = SessionState::CONNECTED;
-				sessions[i]->socket = clientSocket;
-				return i;
-			}
+		int new_id;
+		// for문 검색 대신 번호표 바구니에서 ID를 즉시 뽑아옴 O(1)
+		if (player_id_pool.try_pop(new_id)) {
+			Session* new_session = GetSession(new_id);
+			new_session->id = new_id;
+			new_session->socket = clientSocket;
+			new_session->state = SessionState::CONNECTED;
+			return new_id;
 		}
-		return -1;
+		return -1;	// 빈 번호표 X -> 방 꽉참
 	}
 
 	void WorkerLoop() {
@@ -217,19 +246,23 @@ private:
 				SOCKET newClientSocket = ioCtx->acceptSocket;
 				
 				// AllocateSession()을 불러 빈 방 번호(ID)를 받음
-				int sessionId = AllocateSession(newClientSocket);
+				int allocatedId = AllocateSession(newClientSocket);
 
-				if (sessionId != -1) {		// 빈 방이 성공적으로 배정되었다면
+				if (allocatedId != -1) {		// 빈 방이 성공적으로 배정되었다면
 					// 그 빈 방(소켓)을 hIocp에 등록 (Key로 방 번호인 sessionId를 줌)
-					CreateIoCompletionPort((HANDLE)newClientSocket, hIocp, sessionId, 0);
+					CreateIoCompletionPort((HANDLE)newClientSocket, hIocp, allocatedId, 0);
 
 					// 그 손님에게 WSARecv를 걸어 첫 패킷 수신을 예약
-					auto session = sessions[sessionId];
-					DWORD flags = 0;
-					WSARecv(newClientSocket, &session->recvContext.wsabuf, 1, nullptr, &flags, 
-						&session->recvContext.overlapped, nullptr);
+					Session* session = sessions[allocatedId];
+					if (session != nullptr) {
+						DWORD flags = 0;
+						ZeroMemory(&session->recvContext.overlapped, sizeof(WSAOVERLAPPED));
+						WSARecv(newClientSocket, &session->recvContext.wsabuf, 1, nullptr, &flags,
+							&session->recvContext.overlapped, nullptr);
 
-					std::cout << "[Accept] New player connected. Assigned Session ID: " << sessionId << std::endl;
+						std::cout << "[Accept] New player connected. Assigned Session ID: " << allocatedId << std::endl;
+
+					}
 				}
 				else {
 					closesocket(newClientSocket);	// 방이 꽉 찼으면 소켓을 닫고 돌려보냄
@@ -253,7 +286,9 @@ private:
 
 	void ProcessReceive(int sessionId, DWORD bytesTransferred) {
 		// 패킷 재조립 로직
-		auto session = sessions[sessionId];
+		Session* session = sessions[sessionId];
+		if (not session || session->state.load() != SessionState::INGAME) return;
+
 		int totalBytes = session->prevRemainBytes + bytesTransferred;
 		int readPos = 0;
 
@@ -329,7 +364,12 @@ private:
 	}
 
 	void Disconnect(int id) {
-		sessions[id]->Reset();
+		Session* session = GetSession(id);
+		if (session) {
+			// delete 하지 않고 상태만 비운 다음 번호표 반납
+			session->Reset();
+			if (id < MAX_PLAYERS) player_id_pool.push(id);
+		}
 	}
 };
 
