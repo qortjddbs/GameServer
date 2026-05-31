@@ -85,10 +85,10 @@ int main() {
     // ==========================================
 	auto& resMgr = ResourceManager::GetInstance();
     if (!resMgr.LoadTexture("idle", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Idle.png") ||
-        !resMgr.LoadTexture("run", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack1.png") ||
-        !resMgr.LoadTexture("attack1", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack2.png") ||
-        !resMgr.LoadTexture("guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png") ||
-        !resMgr.LoadTexture("guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Run.png")) {
+        !resMgr.LoadTexture("run", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Run.png") ||
+        !resMgr.LoadTexture("attack1", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack1.png") ||
+        !resMgr.LoadTexture("attack2", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack2.png") ||
+        !resMgr.LoadTexture("guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png")) {
         system("pause");
         return -1;
 	}
@@ -152,11 +152,11 @@ int main() {
                     netMgr.SendPacket(&guardPacket);
                     guardTimer.restart();
                 }
-			}
+            }
         }
 
         // 연속 키 입력 처리 (이동)
-        if (moveTimer.getElapsedTime().asSeconds() >= 0.1f) {
+        if (moveTimer.getElapsedTime().asSeconds() >= 0.5f) {
             int dir = -1;
             if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dir = 0;
             else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dir = 1;
@@ -165,6 +165,10 @@ int main() {
 
             if (dir != -1) {
                 C2S_Move movePacket;
+                
+				// 메모리 0으로 초기화 (안전한 패킷 전송을 위해 권장되는 관행)
+				memset(&movePacket, 0, sizeof(movePacket));
+
 				movePacket.size = sizeof(movePacket);
 				movePacket.type = C2S_MOVE;
                 movePacket.direction = dir;

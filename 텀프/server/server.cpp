@@ -411,17 +411,20 @@ private:
 					resMove.move_time = movePacket->move_time;
 
 					// 임시로 브로드캐스트
-					// BroadcastPacket(&resMove);
+					BroadcastPacket(&resMove);
 				}
 			}
 			else if (type == C2S_ATTACK) {
 				// 공격 패킷 처리
 				S2C_Action actionPacket;
+				memset(&actionPacket, 0, sizeof(actionPacket));
+
 				actionPacket.size = sizeof(actionPacket);
 				actionPacket.type = S2C_ACTION;
+
 				actionPacket.object_id = sessionId;
 				actionPacket.actionType = 1;
-				// BroadcastPacket(&actionPacket);
+				BroadcastPacket(&actionPacket);
 			} 
 			else if (type == C2S_GUARD) {
 				// 방어 패킷 처리
@@ -430,7 +433,7 @@ private:
 				actionPacket.type = S2C_ACTION;
 				actionPacket.object_id = sessionId;
 				actionPacket.actionType = 3;
-				// BroadcastPacket(&actionPacket);
+				BroadcastPacket(&actionPacket);
 			}
 		}
 	}

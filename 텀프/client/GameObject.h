@@ -84,16 +84,38 @@ public:
     }
 
     virtual void updateAnimation() {
-        if (isActionPlaying) {
-            if (currentFrame >= maxFrames - 1 && animClock.getElapsedTime().asSeconds() > 0.05f) {
+        // 1. 현재 상태에 맞춰 애니메이션 속도 세팅
+        float animSpeed = 0.1f;
+        if (currentState == AnimState::RUN) animSpeed = 0.05f;
+		else if (isActionPlaying) animSpeed = 0.06f;    // 공격/방어는 조금 더 빠르게
+
+        // 2. 타이머 틱 (시간이 다 되면 프레임 1증가)
+        if (animClock.getElapsedTime().asSeconds() > animSpeed) {
+            currentFrame++;
+
+            // 핵심 해결 부분 : 단발성 액션이 끝까지 재생되었을 때
+            if (isActionPlaying && currentFrame >= maxFrames) {
                 isActionPlaying = false;
-                currentState = AnimState::IDLE;
-                sprite.setTexture(ResourceManager::GetInstance().GetTexture("idle"));
+
+                // 액션이 끝나자마자 현재 방향키를 누르고 있는지 검사해서 상태를 즉시 복구
+				currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
+				sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "run" : "idle"));
                 currentFrame = 0;
-                maxFrames = 8;
-            }
+                maxFrames = isWalking ? 6 : 8;
+            } 
+            // 일반 루프 애니메이션일 때는 처음으로 반복
+            else if (currentFrame >= maxFrames) {
+                currentFrame = 0;
+			}
+
+            // 텍스처 영역을 잘라서 적용
+			sprite.setTextureRect(sf::IntRect(currentFrame * frameWidth, 0, frameWidth, frameHeight));
+            
+            // 무조건 여기서 딱 한 번만 시계를 리셋하여 무한 루프 폭탄 제거
+			animClock.restart();
         }
 
+        // 액션 중이 아닐 때만 실시간으로 걷기/대기 전환
         if (!isActionPlaying) {
             AnimState nextState = isWalking ? AnimState::RUN : AnimState::IDLE;
 
@@ -109,20 +131,8 @@ public:
                     sprite.setTexture(ResourceManager::GetInstance().GetTexture("idle"));
                     maxFrames = 8;
                 }
+				sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
             }
-        }
-
-        float animSpeed = (currentState == AnimState::RUN) ? 0.05f : 0.1f;
-
-        if (animClock.getElapsedTime().asSeconds() > animSpeed) {
-            currentFrame++;
-
-            if (currentFrame >= maxFrames) {
-                if (isActionPlaying) currentFrame = maxFrames - 1;
-                else currentFrame = 0;
-            }
-            sprite.setTextureRect(sf::IntRect(currentFrame * frameWidth, 0, frameWidth, frameHeight));
-            animClock.restart();
         }
     }
 
