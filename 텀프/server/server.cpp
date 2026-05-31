@@ -287,7 +287,7 @@ private:
 	void ProcessReceive(int sessionId, DWORD bytesTransferred) {
 		// 패킷 재조립 로직
 		Session* session = sessions[sessionId];
-		if (not session || session->state.load() != SessionState::INGAME) return;
+		if (not session || session->state.load() == SessionState::FREE) return;
 
 		int totalBytes = session->prevRemainBytes + bytesTransferred;
 		int readPos = 0;
@@ -324,15 +324,18 @@ private:
 	}
 
 	void OnPacket(int sessionId, char* packet) {			// 온전한 패킷 1개가 완성되면 이 함수로 던져줌
+		Session* session = GetSession(sessionId);
+		if (not session) return;
+		
 		PACKET_TYPE type = reinterpret_cast<C2S_Login*>(packet)->type;
 		// 클라이언트가 어떤 패킷을 보냈든, 구조체의 메모리 맨 앞에는 무조건 크기(size),
 		// 두 번째에는 무조건 타입(type)이 들어있도록 설계했기 때문에, 아무 패킷 구조체(여기서는 제일 만만한 C2S_Login) 로
 		// 포인터를 강제 형변환한 뒤 ->type 을 읽으면, 이 패킷이 어떤 패킷인지 알 수 있음
 
 		if (type == C2S_LOGIN) {
-			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
-			auto session = sessions[sessionId];
+			if (session->state.load() != SessionState::CONNECTED) return;
 
+			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
 			session->x = rand() % 200;	// 초기 테스트용 가벼운 좌표
 			session->y = rand() % 200;
