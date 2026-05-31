@@ -10,28 +10,32 @@ constexpr int NPC_MOVE_INTERVAL = 1000; // in milliseconds
 constexpr int MAX_NAME_LEN = 20;
 constexpr int MAX_CHAT_MSG_LEN = 200;
 
-enum PACKET_TYPE { 
+enum PACKET_TYPE {
 	C2S_LOGIN,			// Client to Server: Login request
-						// 사용자 이름을 포함한 로그인 요청 패킷	
+	// 사용자 이름을 포함한 로그인 요청 패킷	
 	C2S_MOVE,			// Client to Server: Move request
-						// 이동 방향과 이동 시간을 포함한 이동 요청 패킷
+	// 이동 방향과 이동 시간을 포함한 이동 요청 패킷
 	C2S_CHAT,			// Client to Server: Chat message
-						// 채팅 메시지를 포함한 채팅 요청 패킷
+	// 채팅 메시지를 포함한 채팅 요청 패킷
 	C2S_ATTACK,			// Client to Server: Attack request
-						// 공격 요청 패킷 (4 방향 동시 공격)
+	// 공격 요청 패킷 (4 방향 동시 공격)
 	C2S_TELEPORT,		// Client to Server: Teleport request
-						// 텔레포트 요청 패킷 (목적지 좌표 포함)
-						// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
+	// 텔레포트 요청 패킷 (목적지 좌표 포함)
+	// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
 	C2S_LOGOUT,			// Client to Server: Logout request
 
+	C2S_GUARD,			// 방어 추가
+
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
-						// 로그인 결과 패킷 (성공 여부와 메시지 포함)
+	// 로그인 결과 패킷 (성공 여부와 메시지 포함)
 	S2C_AVATAR_INFO,	//	Server to Client: Avatar information
 	S2C_ADD_OBJECT,		//	Server to Client: Add player or NPC		
 	S2C_REMOVE_OBJECT,	//	Server to Client: Remove player or NPC
 	S2C_MOVE_OBJECT,	//	Server to Client: Move player or NPC
 	S2C_CHAT_MESSAGE,	//	Server to Client: Chat message
 	S2C_STATUS_CHANGE,	//	Server to Client: Update player or NPC status (e.g., health, buffs)	
+
+	S2C_ACTION,			//	공격, 방어 등 단발성 애니메이션 전파용
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -44,6 +48,7 @@ struct C2S_Login {
 struct C2S_Move {
 	unsigned char size;
 	PACKET_TYPE   type;
+	unsigned char direction; // 방향 추가 - 0: Up, 1: Down, 2: Left, 3: Right
 	short x;
 	short y;
 	int move_time; // in milliseconds
@@ -56,6 +61,12 @@ struct C2S_Chat {
 };
 
 struct C2S_Attack {
+	unsigned char size;
+	PACKET_TYPE   type;
+};
+
+// 방어 패킷 추가
+struct C2S_Guard {
 	unsigned char size;
 	PACKET_TYPE   type;
 };
@@ -136,6 +147,14 @@ struct S2C_StatusChange {
 	int max_hp;
 	unsigned long long exp;
 	unsigned char level;
+};
+
+// 추가 확장한 프로토콜
+struct S2C_Action {
+	unsigned char size;
+	PACKET_TYPE type;
+	int object_id;
+	unsigned char actionType; // 1: Attack1, 2: Attack2, 3: Guard 등
 };
 
 #pragma pack(pop) // Restore default packing

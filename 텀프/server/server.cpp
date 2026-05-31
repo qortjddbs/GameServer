@@ -284,6 +284,16 @@ private:
 		}
 	}
 
+	void BroadcastPacket(void* packet) {
+		for (int i = 0; i < MAX_PLAYERS; ++i) {
+			Session* session = GetSession(i);
+
+			if (session != nullptr && session->state.load() == SessionState::INGAME) {
+				session->SendPacket(packet);
+			}
+		}
+	}
+
 	void ProcessReceive(int sessionId, DWORD bytesTransferred) {
 		// 패킷 재조립 로직
 		Session* session = sessions[sessionId];
@@ -332,13 +342,14 @@ private:
 		// 두 번째에는 무조건 타입(type)이 들어있도록 설계했기 때문에, 아무 패킷 구조체(여기서는 제일 만만한 C2S_Login) 로
 		// 포인터를 강제 형변환한 뒤 ->type 을 읽으면, 이 패킷이 어떤 패킷인지 알 수 있음
 
+		// 로그인 처리
 		if (type == C2S_LOGIN) {
 			if (session->state.load() != SessionState::CONNECTED) return;
 
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
-			session->x = rand() % 200;	// 초기 테스트용 가벼운 좌표
-			session->y = rand() % 200;
+			session->x = rand() % WORLD_WIDTH;
+			session->y = rand() % WORLD_HEIGHT;
 			session->state = SessionState::INGAME;
 
 			// 1. 결과 패킷 발송
@@ -363,6 +374,64 @@ private:
 			session->SendPacket(&info);
 
 			std::cout << "[Login] Player " << session->name << " entered at (" << session->x << ", " << session->y << ")" << std::endl;
+		}
+		// 인게임 패킷 (이동, 공격, 방어)
+		else {
+			// 로그인을 안 한(CONNECTED) 놈이 움직이거나 공격하려고 하면 입구 컷
+			if (session->state.load() != SessionState::INGAME) return;
+
+			// 이동 패킷 처리
+			if (type == C2S_MOVE) {
+				C2S_Move* movePacket = reinterpret_cast<C2S_Move*>(packet);
+
+				short nx = session->x;
+				short ny = session->y;
+
+				// 방향에 따른 다음 좌표 계산
+				if (movePacket->direction == 0) ny -= 1;		// 상
+				else if (movePacket->direction == 1) nx += 1;	// 우
+				else if (movePacket->direction == 2) ny += 1;	// 하
+				else if (movePacket->direction == 3) nx -= 1;	// 좌
+
+				// 서버 사이드 검증: 맵 범위를 벗어나지 않았는지 확인
+				if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
+					{
+						std::lock_guard<std::mutex> lock(session->sessionLock);
+						session->x = nx;
+						session->y = ny;
+					}
+
+					// 이동 결과를 클라이언트에게 발송 (브로드캐스트)
+					S2C_MoveObject resMove;
+					resMove.size = sizeof(resMove);
+					resMove.type = S2C_MOVE_OBJECT;
+					resMove.object_id = sessionId;
+					resMove.x = nx;
+					resMove.y = ny;
+					resMove.move_time = movePacket->move_time;
+
+					// 임시로 브로드캐스트
+					// BroadcastPacket(&resMove);
+				}
+			}
+			else if (type == C2S_ATTACK) {
+				// 공격 패킷 처리
+				S2C_Action actionPacket;
+				actionPacket.size = sizeof(actionPacket);
+				actionPacket.type = S2C_ACTION;
+				actionPacket.object_id = sessionId;
+				actionPacket.actionType = 1;
+				// BroadcastPacket(&actionPacket);
+			} 
+			else if (type == C2S_GUARD) {
+				// 방어 패킷 처리
+				S2C_Action actionPacket;
+				actionPacket.size = sizeof(actionPacket);
+				actionPacket.type = S2C_ACTION;
+				actionPacket.object_id = sessionId;
+				actionPacket.actionType = 3;
+				// BroadcastPacket(&actionPacket);
+			}
 		}
 	}
 

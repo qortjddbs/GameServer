@@ -203,6 +203,28 @@ void ProcessPacket(char* packet) {
         cout << "내 아바타 생성 완료! (ID: " << g_my_id << ", 위치: " << p->x << ", " << p->y << ")" << endl;
         break;
     }
+    case S2C_MOVE_OBJECT: {
+        auto p = reinterpret_cast<S2C_MoveObject*>(packet);
+
+        // 해당 ID의 객체가 클라이언트에 존재하면 위치 업데이트
+        if (g_objects.count(p->object_id) > 0) {
+            g_objects[p->object_id]->setPosition(p->x, p->y);
+        }
+		break;
+    }
+    case S2C_ACTION: {
+        auto p = reinterpret_cast<S2C_Action*>(packet);
+
+        if (g_objects.count(p->object_id) > 0) {
+            if (p->actionType == 1) { // 공격
+                g_objects[p->object_id]->doAttack();
+            }
+            else if (p->actionType == 3) { // 방어
+                g_objects[p->object_id]->doGuard();
+            }
+        }
+		break;
+    }
     }
 }
 
@@ -296,6 +318,7 @@ int main() {
     // 쿨타임 관리를 위한 타이머
     sf::Clock moveTimer;
     sf::Clock attackTimer;
+	sf::Clock guardTimer;
 
     // 게임 루프
     while (window.isOpen()) {
@@ -309,49 +332,50 @@ int main() {
                 // C 키 : 공격 - 1초 쿨타임
                 if (event.key.code == sf::Keyboard::C) {
                     if (attackTimer.getElapsedTime().asSeconds() >= 1.0f) {
-                        // 내 캐릭터 애니메이션 즉시 실행 (클라이언트 예측) / 아직 서버에서 공격 패킷 안보냄
-                        if (g_my_id != -1 && g_objects.count(g_my_id)) {
-                            g_objects[g_my_id]->doAttack();
-                        }
-
                         // 서버로 공격 패킷 전송
                         C2S_Attack attackPacket;
                         attackPacket.size = sizeof(attackPacket);
                         attackPacket.type = C2S_ATTACK;
+
+                        // 보낼 때만 잠깐 Blocking으로 바꿔서 Partial Send 경고 원천 차단
                         g_socket.send(&attackPacket, attackPacket.size);
 
                         attackTimer.restart();  // 쿨타임 리셋
                     }
                 }
+                // X 키 : 방어 - 1초 쿨타임
                 else if (event.key.code == sf::Keyboard::X) {
-                    if (attackTimer.getElapsedTime().asSeconds() >= 1.0f) {
-                        // 내 캐릭터 애니메이션 즉시 실행 (클라이언트 예측) / 아직 서버에서 방어 패킷 안보냄
-                        if (g_my_id != -1 && g_objects.count(g_my_id)) {
-                            g_objects[g_my_id]->doGuard();
-                        }
+                    if (guardTimer.getElapsedTime().asSeconds() >= 1.0f) {
+                        // 서버로 방어 패킷 전송
+                        C2S_Guard guardPacket;
+                        guardPacket.size = sizeof(guardPacket);
+                        guardPacket.type = C2S_GUARD;
 
-                        // 서버로 방어 패킷 전송 (아직 프로토콜에 방어 패킷 없음)
-                        attackTimer.restart();
+                        // 보낼 때만 잠깐 Blocking으로 바꿔서 Partial Send 경고 원천 차단
+                        g_socket.send(&guardPacket, guardPacket.size);
+
+                        guardTimer.restart();
                     }
                 }
             }
-
+        }
             if (moveTimer.getElapsedTime().asSeconds() >= 0.5f) {
-                int dx = 0, dy = 0;
+				int dir = -1; // 0: Up, 1: Down, 2: Left, 3: Right
 
-                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) dx = -1;
-                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) dx = 1;
-                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dy = -1;
-                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dy = 1;
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left))         dir = 2;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right))   dir = 3;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up))      dir = 0;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down))    dir = 1;
 
-                if (dx != 0 || dy != 0) {
+                if (dir != -1) {
                     // 서버로 이동 패킷 전송
                     C2S_Move movePacket;
                     movePacket.size = sizeof(movePacket);
                     movePacket.type = C2S_MOVE;
-                    // movePacket.direction = /* dx, dy를 통해 프로토콜에 맞는 방향 값(0~3) 산출 */;
+                    movePacket.direction = dir;
 
                     g_socket.send(&movePacket, movePacket.size);
+
                     moveTimer.restart();  // 쿨타임 리셋
                 }
             }
@@ -378,7 +402,6 @@ int main() {
                 pair.second->draw(window);
             }
             window.display();
-        }
     }
 
     return 0;

@@ -126,8 +126,10 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="client.cpp" />
+    <ClCompile Include="NetworkManager.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="NetworkManager.h" />
     <ClInclude Include="protocol_2026.h" />
   </ItemGroup>
   <ItemGroup>
