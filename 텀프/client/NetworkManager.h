@@ -3,7 +3,7 @@
 #include <unordered_map>
 #include <functional>
 #include <iostream>
-#include "protocol_2026.h"
+#include "..\..\텀프\server\protocol_2026.h"
 
 // 패킷의 공통 헤더 (타입 추출용)
 #pragma pack(push, 1)

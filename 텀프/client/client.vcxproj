@@ -127,10 +127,13 @@
   <ItemGroup>
     <ClCompile Include="client.cpp" />
     <ClCompile Include="NetworkManager.cpp" />
+    <ClCompile Include="ResourceManager.cpp" />
   </ItemGroup>
   <ItemGroup>
+    <ClInclude Include="GameManager.h" />
+    <ClInclude Include="GameObject.h" />
     <ClInclude Include="NetworkManager.h" />
-    <ClInclude Include="protocol_2026.h" />
+    <ClInclude Include="ResourceManager.h" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
