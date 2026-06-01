@@ -1,33 +1,37 @@
 #include "MapManager.h"
 
-void MapManager::Initialize() {
-    m_width = 20;
-    m_height = 20;
+void MapManager::Initialize(int width, int height) {
+    m_width = 200;
+    m_height = 200;
 
-    // 맵 전체를 빈 공간(-1)으로 초기화
-    m_map.resize(m_height, std::vector<TileInfo>(m_width, { -1, -1, false }));
+	// 맵 전체를 평지 타일로 초기화
+    m_map.resize(m_height, std::vector<TileInfo>(m_width, { 1, 1, false }));
 
     // 타일 스프라이트에 텍스처 미리 연결
     m_tileSprite.setTexture(ResourceManager::GetInstance().GetTexture("tilemap"));
     m_shadowSprite.setTexture(ResourceManager::GetInstance().GetTexture("shadow"));
 
-    // 테스트용 10x10 풀밭 섬 생성 (화면 중앙쯤)
-    for (int y = 5; y < 15; ++y) {
-        for (int x = 5; x < 15; ++x) {
-            // 스프라이트 시트에서 X:1, Y:1 위치가 '평지 중앙 풀밭' 타일입니다.
-            m_map[y][x] = { 1, 1, false };
-        }
-    }
+    for (int i = 0; i < 500; ++i) {
+        int rx = rand() % (m_width - 2);
+        int ry = rand() % (m_height - 2);
 
-    // [테스트] 중앙에 언덕(Elevated Ground) 2x2 사이즈로 하나 세워보기
-    // 언덕 풀밭 타일은 시트에서 대략 X:5, Y:1 위치에 있습니다. (우측 블록)
-    m_map[9][9] = { 5, 1, true };
-    m_map[9][10] = { 5, 1, true };
-    m_map[10][9] = { 5, 1, true };
-    m_map[10][10] = { 5, 1, true };
+        m_map[ry][rx] = { 5, 1, true };
+        m_map[ry][rx + 1] = { 5, 1, true };
+        m_map[ry + 1][rx] = { 5, 1, true };
+        m_map[ry + 1][rx + 1] = { 5, 1, true };
+    }
 }
 
-void MapManager::Draw(sf::RenderWindow& window) {
+void MapManager::Draw(sf::RenderWindow& window, const sf::View& camera) {
+	sf::Vector2f center = camera.getCenter();
+	sf::Vector2f size = camera.getSize();
+
+	int startX = std::max(0, static_cast<int>((center.x - size.x / 2.0f) / TILE_SIZE) - 1);
+	int endX = std::min(m_width - 1, static_cast<int>((center.x + size.x / 2.0f) / TILE_SIZE) + 1);
+
+	int startY = std::max(0, static_cast<int>((center.y - size.y / 2.0f) / TILE_SIZE) - 1);
+	int endY = std::min(m_height - 1, static_cast<int>((center.y + size.y / 2.0f) / TILE_SIZE) + 1);
+
     // 1. 평지(Flat Ground) 먼저 그리기
     for (int y = 0; y < m_height; ++y) {
         for (int x = 0; x < m_width; ++x) {

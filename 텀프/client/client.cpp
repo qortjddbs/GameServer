@@ -105,7 +105,7 @@ int main() {
         return -1;
 	}
 
-	MapManager::GetInstance().Initialize();
+	MapManager::GetInstance().Initialize(WORLD_WIDTH, WORLD_HEIGHT);
 
     // ==========================================
     // [초기화 2] 네트워크 설정 및 콜백(핸들러) 등록
@@ -201,26 +201,32 @@ int main() {
 
 		}
 
+		GameObject* myAvatar = gameMgr.GetMyAvatar();
+
         // 연속 키 입력 처리 (이동)
         if (moveTimer.getElapsedTime().asSeconds() >= 0.1f) {
-            int dir = -1;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dir = 0;
-            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dir = 1;
-            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) dir = 2;
-			else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) dir = 3;
+			bool isComboProgressing = (comboStep > 0 && comboResetTimer.getElapsedTime().asSeconds() <= 0.5f);
+            
+            if (myAvatar != nullptr && !myAvatar->isActionPlaying && !isComboProgressing) {
+                int dir = -1;
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dir = 0;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dir = 1;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) dir = 2;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) dir = 3;
 
-            if (dir != -1) {
-                C2S_Move movePacket;
-                
-				// 메모리 0으로 초기화 (안전한 패킷 전송을 위해 권장되는 관행)
-				memset(&movePacket, 0, sizeof(movePacket));
+                if (dir != -1) {
+                    C2S_Move movePacket;
 
-				movePacket.size = sizeof(movePacket);
-				movePacket.type = C2S_MOVE;
-                movePacket.direction = dir;
+                    // 메모리 0으로 초기화 (안전한 패킷 전송을 위해 권장되는 관행)
+                    memset(&movePacket, 0, sizeof(movePacket));
 
-                netMgr.SendPacket(&movePacket);
-				moveTimer.restart();
+                    movePacket.size = sizeof(movePacket);
+                    movePacket.type = C2S_MOVE;
+                    movePacket.direction = dir;
+
+                    netMgr.SendPacket(&movePacket);
+                    moveTimer.restart();
+                }
             }
         }
 
@@ -231,13 +237,12 @@ int main() {
         window.clear(sf::Color(78, 131, 151));      // 바다 색
 
         // 게임 월드 그리기
-		GameObject* myAvatar = gameMgr.GetMyAvatar();
         if (myAvatar) {
             camera.setCenter(myAvatar->sprite.getPosition());
             window.setView(camera);
 		}
 
-		MapManager::GetInstance().Draw(window);     // 맵 타일 그리기
+		MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
         gameMgr.UpdateAndDrawAll(window); // 애니메이션 갱신 및 화면 출력
 
 		window.setView(window.getDefaultView());

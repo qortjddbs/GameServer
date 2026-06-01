@@ -29,9 +29,9 @@ public:
         return instance;
     }
 
-    // 맵 초기화 및 임시 섬 만들기
-    void Initialize();
+    // 맵 초기화
+    void Initialize(int width, int height);
 
-    // 렌더링 (캐릭터보다 먼저 호출되어야 함)
-    void Draw(sf::RenderWindow& window);
+    // 렌더링 (화면 안의 타일만 그리도록)
+    void Draw(sf::RenderWindow& window, const sf::View& camera);
 };

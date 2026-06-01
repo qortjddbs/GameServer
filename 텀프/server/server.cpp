@@ -348,8 +348,8 @@ private:
 
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
-			session->x = 0;
-			session->y = 0;
+			session->x = 100;
+			session->y = 100;
 			session->state = SessionState::INGAME;
 
 			// 1. 결과 패킷 발송
