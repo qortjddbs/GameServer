@@ -63,6 +63,7 @@ struct C2S_Chat {
 struct C2S_Attack {
 	unsigned char size;
 	PACKET_TYPE   type;
+	unsigned char attackType; // 1: Attack1, 2: Attack2
 };
 
 // 방어 패킷 추가

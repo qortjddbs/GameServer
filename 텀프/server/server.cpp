@@ -388,10 +388,10 @@ private:
 				short ny = session->y;
 
 				// 방향에 따른 다음 좌표 계산
-				if (movePacket->direction == 0) ny -= 1;		// 상
-				else if (movePacket->direction == 1) nx += 1;	// 우
-				else if (movePacket->direction == 2) ny += 1;	// 하
-				else if (movePacket->direction == 3) nx -= 1;	// 좌
+				if (movePacket->direction == 0) ny += 1;		// Up
+				else if (movePacket->direction == 1) ny -= 1;	// Down
+				else if (movePacket->direction == 2) nx -= 1;	// Left
+				else if (movePacket->direction == 3) nx += 1;	// Right
 
 				// 서버 사이드 검증: 맵 범위를 벗어나지 않았는지 확인
 				if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
@@ -416,14 +416,18 @@ private:
 			}
 			else if (type == C2S_ATTACK) {
 				// 공격 패킷 처리
+				C2S_Attack* atk = reinterpret_cast<C2S_Attack*>(packet);
+
 				S2C_Action actionPacket;
 				memset(&actionPacket, 0, sizeof(actionPacket));
 
 				actionPacket.size = sizeof(actionPacket);
 				actionPacket.type = S2C_ACTION;
-
 				actionPacket.object_id = sessionId;
 				actionPacket.actionType = 1;
+
+				actionPacket.actionType = atk->attackType;
+
 				BroadcastPacket(&actionPacket);
 			} 
 			else if (type == C2S_GUARD) {

@@ -20,6 +20,7 @@ public:
 
     // 애니메이션 관리를 위한 변수들
     sf::Clock animClock;
+    sf::Clock walkTimer;
     AnimState currentState = AnimState::IDLE;
     bool isWalking = false;
     int prev_x = 0, prev_y = 0;
@@ -46,6 +47,8 @@ public:
     virtual void setPosition(int new_x, int new_y) {
         if (x != new_x || y != new_y) {
             isWalking = true;
+            walkTimer.restart();
+
             if (new_x < x) sprite.setScale(-1.0f, 1.0f);
             else if (new_x > x) sprite.setScale(1.0f, 1.0f);
         }
@@ -61,9 +64,20 @@ public:
         sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
     }
 
-    void doAttack() {
+    void doAttack1() {
         currentState = AnimState::ATTACK1;
         sprite.setTexture(ResourceManager::GetInstance().GetTexture("attack1"));
+        currentFrame = 0;
+        maxFrames = 4;
+        isActionPlaying = true;
+
+        sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
+        animClock.restart();
+    }
+
+    void doAttack2() {
+        currentState = AnimState::ATTACK2;
+        sprite.setTexture(ResourceManager::GetInstance().GetTexture("attack2"));
         currentFrame = 0;
         maxFrames = 4;
         isActionPlaying = true;
@@ -84,6 +98,10 @@ public:
     }
 
     virtual void updateAnimation() {
+        if (isWalking && walkTimer.getElapsedTime().asSeconds() > 0.15f) {
+            isWalking = false;
+		}
+
         // 1. 현재 상태에 맞춰 애니메이션 속도 세팅
         float animSpeed = 0.1f;
         if (currentState == AnimState::RUN) animSpeed = 0.05f;

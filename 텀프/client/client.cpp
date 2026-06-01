@@ -69,7 +69,8 @@ void OnAction(char* packet) {
     auto p = reinterpret_cast<S2C_Action*>(packet);
     GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
     if (obj) {
-        if (p->actionType == 1) obj->doAttack();
+        if (p->actionType == 1) obj->doAttack1();
+		else if (p->actionType == 2) obj->doAttack2();
         else if (p->actionType == 3) obj->doGuard();
     }
 }
@@ -132,6 +133,9 @@ int main() {
 	sf::Clock attackTimer;
 	sf::Clock guardTimer;
 
+    unsigned char comboStep = 0;
+    sf::Clock comboResetTimer;
+
     // ==========================================
     // [메인 게임 루프]
     // ==========================================
@@ -140,23 +144,52 @@ int main() {
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) window.close();
 
-            // 단발성 키 입력 처리 (공격, 방어)
-            if (event.type == sf::Event::KeyPressed) {
-                if (event.key.code == sf::Keyboard::C && attackTimer.getElapsedTime().asSeconds() > 1.0f) {
-                    C2S_Attack attackPacket = { sizeof(C2S_Attack), C2S_ATTACK };
-                    netMgr.SendPacket(&attackPacket);
-                    attackTimer.restart();
-                }
-                else if (event.key.code == sf::Keyboard::X && guardTimer.getElapsedTime().asSeconds() > 1.0f) {
-                    C2S_Guard guardPacket = { sizeof(C2S_Guard), C2S_GUARD };
-                    netMgr.SendPacket(&guardPacket);
-                    guardTimer.restart();
-                }
+            // 단발성 키 입력 처리 (방어)
+            if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::X && guardTimer.getElapsedTime().asSeconds() > 0.3f) {
+                C2S_Guard guardPacket = { sizeof(C2S_Guard), C2S_GUARD };
+                netMgr.SendPacket(&guardPacket);
+                guardTimer.restart();
             }
         }
 
+        // 치다가 말았을 때 0.5초가 지나면 콤보 초기화 (다시 1타부터)
+        if (comboStep > 0 && comboStep < 3 && comboResetTimer.getElapsedTime().asSeconds() > 0.5f) {
+            comboStep = 0;
+		}
+
+        // C키를 꾹 누르고 있다면
+        if (sf::Keyboard::isKeyPressed(sf::Keyboard::C)) {
+            // 3연타를 마쳤다면 긴 쿨타임, 연타 중이라면 짧은 쿨타임
+            float requiredCooldown = (comboStep == 3) ? 1.0f : 0.3f;
+
+            if (attackTimer.getElapsedTime().asSeconds() >= requiredCooldown) {
+                C2S_Attack attackPacket;
+                memset(&attackPacket, 0, sizeof(attackPacket));
+				attackPacket.size = sizeof(attackPacket);
+				attackPacket.type = C2S_ATTACK;
+
+                if (comboStep == 0 || comboStep == 3) {
+                    attackPacket.attackType = 1; // 1타
+                    comboStep = 1;
+                }
+                else if (comboStep == 1) {
+                    attackPacket.attackType = 2; // 2타
+                    comboStep = 2;
+                }
+                else if (comboStep == 2) {
+                    attackPacket.attackType = 1;
+                    comboStep = 3;
+                }
+
+                netMgr.SendPacket(&attackPacket);
+                attackTimer.restart();
+                comboResetTimer.restart();
+            }
+
+		}
+
         // 연속 키 입력 처리 (이동)
-        if (moveTimer.getElapsedTime().asSeconds() >= 0.5f) {
+        if (moveTimer.getElapsedTime().asSeconds() >= 0.1f) {
             int dir = -1;
             if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dir = 0;
             else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dir = 1;
