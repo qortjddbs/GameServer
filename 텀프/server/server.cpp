@@ -115,12 +115,14 @@ public:
 			int real_index = MAX_PLAYERS + i;		// 실제 배열 인덱스
 			int npc_id = NPC_ID_START + i;			// 게임 속 NPC의 ID (100만~)
 
-			sessions[i] = new Session();
-			sessions[i]->sessionIndex = real_index;
-			sessions[i]->id = npc_id;
-			sessions[i]->state.store(SessionState::INGAME);
-			sessions[i]->x = rand() % WORLD_WIDTH;
-			sessions[i]->y = rand() % WORLD_HEIGHT;
+			sessions[real_index] = new Session();
+			sessions[real_index]->sessionIndex = real_index;
+			sessions[real_index]->id = npc_id;
+			sessions[real_index]->state.store(SessionState::INGAME);
+			sessions[real_index]->x = rand() % 200;
+			sessions[real_index]->y = rand() % 200;
+
+			sprintf_s(sessions[real_index]->name, "Monster_%d", i + 1);
 		}
 	}
 
@@ -374,6 +376,26 @@ private:
 			session->SendPacket(&info);
 
 			std::cout << "[Login] Player " << session->name << " entered at (" << session->x << ", " << session->y << ")" << std::endl;
+
+			for (int i = 0; i < NUM_NPCS; ++i) {
+				Session* npcSession = GetSession(NPC_ID_START + i);
+				if (npcSession && npcSession->state.load() == SessionState::INGAME) {
+					S2C_AddObject addNpc;
+					addNpc.size = sizeof(addNpc);
+					addNpc.type = S2C_ADD_OBJECT;
+					addNpc.object_id = npcSession->id;
+					addNpc.visual_id = 0;	// 나중에 몬스터 종류별로 다른 비주얼 아이디 줄 수 있게끔
+					addNpc.x = npcSession->x;
+					addNpc.y = npcSession->y;
+					addNpc.hp = npcSession->hp;
+					addNpc.max_hp = npcSession->max_hp;
+					addNpc.level = npcSession->level;
+					strcpy_s(addNpc.obj_name, npcSession->name);
+
+					session->SendPacket(&addNpc);
+				}
+			}
+			std::cout << "NPC " << NUM_NPCS << "마리 생성 완료!" << std::endl;
 		}
 		// 인게임 패킷 (이동, 공격, 방어)
 		else {

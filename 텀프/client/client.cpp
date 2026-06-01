@@ -44,12 +44,31 @@ void OnAvatarInfo(char* packet) {
 void OnAddObject(char* packet) {
 	auto p = reinterpret_cast<S2C_AddObject*>(packet);
 
+    if (GameManager::GetInstance().GetObject(p->object_id) != nullptr) return;
+
     // 타 유저나 NPC가 시야에 들어왔을 때 생성
     auto new_obj = std::make_unique<GameObject>();
 	new_obj->id = p->object_id;
 	new_obj->setPosition(p->x, p->y);
 	strcpy_s(new_obj->name, p->obj_name);
-    // (필요 시 이름표 출력 설정 등 추가)
+
+    // NPC
+    if (p->object_id >= 10'0000) {
+        
+    }
+
+    // 2. 이름표(Text) 세팅
+    auto& resMgr = ResourceManager::GetInstance();
+    new_obj->nameText.setFont(resMgr.GetFont("main_font")); // 폰트 장착
+    new_obj->nameText.setString(new_obj->name);             // 글씨 설정
+    new_obj->nameText.setCharacterSize(18);                 // 글씨 크기
+    new_obj->nameText.setFillColor(sf::Color::White);       // 흰색 글씨
+    new_obj->nameText.setOutlineColor(sf::Color::Black);    // 검은 테두리
+    new_obj->nameText.setOutlineThickness(1.5f);            // 테두리 두께
+
+    // 글씨의 중심점을 중앙으로 맞춰서 머리 위에 예쁘게 뜨도록 설정
+    sf::FloatRect textRect = new_obj->nameText.getLocalBounds();
+    new_obj->nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
 
     GameManager::GetInstance().AddObject(p->object_id, std::move(new_obj));
 }
