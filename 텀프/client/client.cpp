@@ -160,7 +160,7 @@ int main() {
         // C키를 꾹 누르고 있다면
         if (sf::Keyboard::isKeyPressed(sf::Keyboard::C)) {
             // 3연타를 마쳤다면 긴 쿨타임, 연타 중이라면 짧은 쿨타임
-            float requiredCooldown = (comboStep == 3) ? 1.0f : 0.3f;
+            float requiredCooldown = (comboStep == 3) ? 0.7f : 0.3f;
 
             if (attackTimer.getElapsedTime().asSeconds() >= requiredCooldown) {
                 C2S_Attack attackPacket;
