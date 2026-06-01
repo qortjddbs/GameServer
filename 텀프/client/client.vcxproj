@@ -126,6 +126,7 @@
   </ItemDefinitionGroup>
   <ItemGroup>
     <ClCompile Include="client.cpp" />
+    <ClCompile Include="MapManager.cpp" />
     <ClCompile Include="NetworkManager.cpp" />
     <ClCompile Include="ResourceManager.cpp" />
   </ItemGroup>
@@ -133,6 +134,7 @@
     <ClInclude Include="..\server\protocol_2026.h" />
     <ClInclude Include="GameManager.h" />
     <ClInclude Include="GameObject.h" />
+    <ClInclude Include="MapManager.h" />
     <ClInclude Include="NetworkManager.h" />
     <ClInclude Include="ResourceManager.h" />
   </ItemGroup>

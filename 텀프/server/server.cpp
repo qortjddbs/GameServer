@@ -348,8 +348,8 @@ private:
 
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
-			session->x = rand() % WORLD_WIDTH;
-			session->y = rand() % WORLD_HEIGHT;
+			session->x = 0;
+			session->y = 0;
 			session->state = SessionState::INGAME;
 
 			// 1. 결과 패킷 발송
@@ -388,8 +388,8 @@ private:
 				short ny = session->y;
 
 				// 방향에 따른 다음 좌표 계산
-				if (movePacket->direction == 0) ny += 1;		// Up
-				else if (movePacket->direction == 1) ny -= 1;	// Down
+				if (movePacket->direction == 0) ny -= 1;		// Up
+				else if (movePacket->direction == 1) ny += 1;	// Down
 				else if (movePacket->direction == 2) nx -= 1;	// Left
 				else if (movePacket->direction == 3) nx += 1;	// Right
 

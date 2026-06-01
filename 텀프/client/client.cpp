@@ -7,6 +7,7 @@
 #include "GameManager.h"
 #include "NetworkManager.h"
 #include "ResourceManager.h"
+#include "MapManager.h"
 
 using namespace std;
 
@@ -85,14 +86,26 @@ int main() {
     // [초기화 1] 리소스 로드
     // ==========================================
 	auto& resMgr = ResourceManager::GetInstance();
-    if (!resMgr.LoadTexture("idle", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Idle.png") ||
+
+    if (!resMgr.LoadFont("main_font", "cour.ttf")) {
+        cout << "폰트 로드 실패!" << endl;
+		return -1;
+    }
+
+    if (
+        !resMgr.LoadTexture("idle", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Idle.png") ||
         !resMgr.LoadTexture("run", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Run.png") ||
         !resMgr.LoadTexture("attack1", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack1.png") ||
         !resMgr.LoadTexture("attack2", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack2.png") ||
-        !resMgr.LoadTexture("guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png")) {
+        !resMgr.LoadTexture("guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png") ||
+        !resMgr.LoadTexture("tilemap", "Assets/Tiny Swords/Terrain/Tileset/Tilemap_color1.png") ||
+        !resMgr.LoadTexture("shadow", "Assets/Tiny Swords/Terrain/Tileset/Shadow.png")
+        ) {
         system("pause");
         return -1;
 	}
+
+	MapManager::GetInstance().Initialize();
 
     // ==========================================
     // [초기화 2] 네트워크 설정 및 콜백(핸들러) 등록
@@ -214,16 +227,41 @@ int main() {
         // 1. 네트워크 패킷 수신 및 자동 분배
         netMgr.Receive();
 
-        // 2. 카메라 추적 (내 아바타 중심)
-        GameObject* myAvatar = gameMgr.GetMyAvatar();
+        // 3. 렌더링
+        window.clear(sf::Color(78, 131, 151));      // 바다 색
+
+        // 게임 월드 그리기
+		GameObject* myAvatar = gameMgr.GetMyAvatar();
         if (myAvatar) {
             camera.setCenter(myAvatar->sprite.getPosition());
             window.setView(camera);
-        }
+		}
 
-        // 3. 렌더링
-        window.clear(sf::Color(50, 50, 50));
+		MapManager::GetInstance().Draw(window);     // 맵 타일 그리기
         gameMgr.UpdateAndDrawAll(window); // 애니메이션 갱신 및 화면 출력
+
+		window.setView(window.getDefaultView());
+
+        if (myAvatar) {
+            sf::Text coordText;
+			coordText.setFont(resMgr.GetFont("main_font"));
+
+            char buf[64];
+			sprintf_s(buf, "(%d, %d)", myAvatar->x, myAvatar->y);
+			coordText.setString(buf);
+
+            // 글씨 꾸미기
+            coordText.setCharacterSize(24);
+            coordText.setFillColor(sf::Color::White);           // 흰색 글씨
+            coordText.setOutlineColor(sf::Color::Black);        // 검은색 테두리 (배경이 밝아도 잘 보이게)
+            coordText.setOutlineThickness(2.0f);
+
+            // 위치 고정 (화면 왼쪽 위)
+            coordText.setPosition(15.f, 15.f);
+
+            window.draw(coordText);
+		}
+
         window.display();
     }
 	return 0;
