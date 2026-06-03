@@ -6,6 +6,7 @@
 
 // 애니메이션 상태 열거형
 enum class AnimState { IDLE, RUN, ATTACK1, ATTACK2, GUARD };
+enum class ObjectType { PLAYER, SKELETON };
 
 class GameObject {
 public:
@@ -17,28 +18,33 @@ public:
     unsigned char level;
 
     sf::Sprite sprite;
+    sf::Text nameText;
 
     // 애니메이션 관리를 위한 변수들
     sf::Clock animClock;
     sf::Clock walkTimer;
+    sf::Clock guardTimer;
     AnimState currentState = AnimState::IDLE;
     bool isWalking = false;
     int prev_x = 0, prev_y = 0;
     bool isActionPlaying = false; // 공격/방어 진행 중 플래그
 
     // 프레임 규격 (한 장당 192 x 192)
-    const int frameWidth = 192;
-    const int frameHeight = 192;
+    int frameWidth = 192;
+    int frameHeight = 192;
+    ObjectType objectType = ObjectType::PLAYER;
 
     int currentFrame = 0;       // 현재 프레임 번호
     int maxFrames = 8;          // 총 프레임 개수 (Idle 기준)
+
+	float scale = 1.0f;            // 스프라이트 크기 조절용
 
     // 생성자 (ResourceManager 적용 완료)
     GameObject() : id(-1), x(0), y(0), hp(0), max_hp(0), exp(0), level(1) {
         memset(name, 0, sizeof(name));
 
         // 매니저를 통해 초기 텍스처(Idle) 세팅
-        sprite.setTexture(ResourceManager::GetInstance().GetTexture("idle"));
+        sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_idle"));
 
         sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
         sprite.setOrigin(frameWidth / 2.0f, frameHeight / 2.0f);
@@ -49,8 +55,8 @@ public:
             isWalking = true;
             walkTimer.restart();
 
-            if (new_x < x) sprite.setScale(-1.0f, 1.0f);
-            else if (new_x > x) sprite.setScale(1.0f, 1.0f);
+            if (new_x < x) sprite.setScale(-scale, scale);
+            else if (new_x > x) sprite.setScale(scale, scale);
         }
         else {
             isWalking = false;
@@ -66,41 +72,119 @@ public:
 
     void doAttack1() {
         currentState = AnimState::ATTACK1;
-        sprite.setTexture(ResourceManager::GetInstance().GetTexture("attack1"));
-        currentFrame = 0;
-        maxFrames = 4;
         isActionPlaying = true;
+        currentFrame = 0;
+        animClock.restart();
+
+        switch (objectType) {
+        case ObjectType::PLAYER: {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_attack1"));
+            maxFrames = 6;
+            break;
+            }
+        case ObjectType::SKELETON: {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_attack1"));
+            maxFrames = 8;
+            break;
+            }
+        }
+
 
         sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
-        animClock.restart();
     }
 
     void doAttack2() {
         currentState = AnimState::ATTACK2;
-        sprite.setTexture(ResourceManager::GetInstance().GetTexture("attack2"));
-        currentFrame = 0;
-        maxFrames = 4;
         isActionPlaying = true;
+        currentFrame = 0;
+        animClock.restart();
+
+        switch (objectType) {
+        case ObjectType::PLAYER: {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_attack2"));
+            maxFrames = 6;
+            break;
+        }
+        case ObjectType::SKELETON: {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_attack2"));
+            maxFrames = 8;
+            break;
+        }
+        }
 
         sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
-        animClock.restart();
     }
 
     void doGuard() {
-        currentState = AnimState::GUARD;
-        sprite.setTexture(ResourceManager::GetInstance().GetTexture("guard"));
-        currentFrame = 0;
-        maxFrames = 6;
-        isActionPlaying = true;
+        guardTimer.restart();
+
+        if (currentState != AnimState::GUARD) {
+            currentState = AnimState::GUARD;
+            isActionPlaying = true;
+            currentFrame = 0;
+            animClock.restart();
+        }
+
+        switch (objectType) {
+        case ObjectType::PLAYER: {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_guard"));
+            maxFrames = 6;
+            break;
+        }
+        case ObjectType::SKELETON: {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_guard"));
+            maxFrames = 4;
+            break;
+        }
+        }
 
         sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
-        animClock.restart();
+    }
+
+    void forceStopAction() {
+        if (currentState == AnimState::GUARD) {
+            isActionPlaying = false;
+            currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
+            currentFrame = 0;
+
+            switch (objectType) {
+            case ObjectType::PLAYER: {
+                sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
+                maxFrames = isWalking ? 6 : 8;
+				break;
+            }
+            case ObjectType::SKELETON: {
+				sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
+                maxFrames = 4;
+				break;
+            }
+            }
+            sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
+        }
     }
 
     virtual void updateAnimation() {
         if (isWalking && walkTimer.getElapsedTime().asSeconds() > 0.15f) {
             isWalking = false;
 		}
+
+        if (currentState == AnimState::GUARD && guardTimer.getElapsedTime().asSeconds() > 0.3f) {
+            isActionPlaying = false;
+			currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
+            currentFrame = 0;
+
+            switch (objectType) {
+            case ObjectType::PLAYER: {
+                sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
+                maxFrames = isWalking ? 6 : 8;
+                break;
+            }
+            case ObjectType::SKELETON: {
+                sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
+                maxFrames = 4;
+            }
+        }
+	}
 
         // 1. 현재 상태에 맞춰 애니메이션 속도 세팅
         float animSpeed = 0.1f;
@@ -109,20 +193,37 @@ public:
 
         // 2. 타이머 틱 (시간이 다 되면 프레임 1증가)
         if (animClock.getElapsedTime().asSeconds() > animSpeed) {
-            currentFrame++;
-
-            // 핵심 해결 부분 : 단발성 액션이 끝까지 재생되었을 때
-            if (isActionPlaying && currentFrame >= maxFrames) {
-                isActionPlaying = false;
-
-                // 액션이 끝나자마자 현재 방향키를 누르고 있는지 검사해서 상태를 즉시 복구
-				currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
-				sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "run" : "idle"));
+            if (currentState == AnimState::GUARD && currentFrame == maxFrames - 1) {
                 currentFrame = 0;
-                maxFrames = isWalking ? 6 : 8;
+            }
+			else currentFrame++;
+
+            // 단발성 액션이 끝까지 재생되었을 때
+            if (isActionPlaying && currentFrame >= maxFrames) {
+                if (currentState == AnimState::GUARD) {
+					currentFrame = maxFrames - 1;
+                }
+                else {
+					isActionPlaying = false;
+                    currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
+                    currentFrame = 0;
+                    switch (objectType) {
+                    case ObjectType::PLAYER: {
+                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
+                        maxFrames = isWalking ? 6 : 8;
+                        break;
+                    }
+                    case ObjectType::SKELETON: {
+                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
+                        maxFrames = 4;
+                        break;
+                    }
+                    }
+                }
+				
             } 
             // 일반 루프 애니메이션일 때는 처음으로 반복
-            else if (currentFrame >= maxFrames) {
+            else if (!isActionPlaying && currentFrame >= maxFrames) {
                 currentFrame = 0;
 			}
 
@@ -141,13 +242,16 @@ public:
                 currentState = nextState;
                 currentFrame = 0;
 
-                if (currentState == AnimState::RUN) {
-                    sprite.setTexture(ResourceManager::GetInstance().GetTexture("run"));
-                    maxFrames = 6;
-                }
-                else {
-                    sprite.setTexture(ResourceManager::GetInstance().GetTexture("idle"));
-                    maxFrames = 8;
+                switch (objectType) {
+                    case ObjectType::PLAYER: {
+                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
+                        maxFrames = isWalking ? 6 : 8;
+                        break;
+					}
+                    case ObjectType::SKELETON: {
+                        maxFrames = 4;
+                        break;
+					}
                 }
 				sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
             }
