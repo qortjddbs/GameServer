@@ -11,6 +11,18 @@ private:
     std::unordered_map<int, std::unique_ptr<GameObject>> m_objects;
     int m_myId = -1;
 
+	// 4방향 공격 이펙트 관리를 위한 구조체와 벡터
+    struct AttackEffect {
+        int x, y;
+        sf::Sprite sprite;
+        sf::Clock animClock;
+        int currentFrame = 0;
+        int maxFrames = 10;
+        int frameWidth;
+		int frameHeight;
+    };
+    std::vector<AttackEffect> m_effects;
+
     // 싱글톤 패턴을 위한 private 생성자
     GameManager() = default;
 
@@ -55,6 +67,57 @@ public:
         for (auto& pair : m_objects) {
             pair.second->updateAnimation();
             pair.second->draw(window);
+        }
+    }
+
+    // 특정 좌표에 이펙트 애니메이션을 생성하는 함수
+    void AddAttackEffect(int x, int y) {
+        AttackEffect effect;
+        effect.x = x;
+		effect.y = y;
+
+        // 텍스처 세팅
+        auto& texture = ResourceManager::GetInstance().GetTexture("attack_effect");
+        effect.sprite.setTexture(texture);
+
+        // 1칸당 픽셀 사이즈 계산 (이미지 전체 가로 길이 / 프레임 개수)
+        effect.frameWidth = texture.getSize().x / effect.maxFrames;
+        effect.frameHeight = texture.getSize().y;
+
+        // 첫 프레임 잘라내기 및 중심점 세팅
+        effect.sprite.setTextureRect(sf::IntRect(0, 0, effect.frameWidth, effect.frameHeight));
+        effect.sprite.setOrigin(effect.frameWidth / 2.0f, effect.frameHeight / 2.0f);
+
+        // 타일 크기(64)에 맞게 살짝 크기 조정 (필요시 배율 수정)
+        effect.sprite.setScale(2.0f, 2.0f);
+
+        m_effects.push_back(effect);
+    }
+
+    // 매 프레임마다 이펙트를 갱신하고 그리는 함수
+    void DrawEffects(sf::RenderWindow& window) {
+        auto it = m_effects.begin();
+        while (it != m_effects.end()) {
+
+            // 0.05초마다 다음 프레임으로 넘기기 (속도 조절 가능)
+            if (it->animClock.getElapsedTime().asSeconds() > 0.05f) {
+                it->currentFrame++;
+                it->animClock.restart();
+            }
+
+            // 프레임이 끝까지 도달하면 리스트에서 완전히 삭제 (이펙트 종료)
+            if (it->currentFrame >= it->maxFrames) {
+                it = m_effects.erase(it);
+            }
+            else {
+                // 다음 프레임 이미지 잘라내기
+                it->sprite.setTextureRect(sf::IntRect(it->currentFrame * it->frameWidth, 0, it->frameWidth, it->frameHeight));
+                // 캐릭터 좌표계(타일 중앙)에 맞춰서 위치 세팅
+                it->sprite.setPosition(it->x * 64.f + 32.f, it->y * 64.f + 32.f);
+
+                window.draw(it->sprite);
+                ++it;
+            }
         }
     }
 };

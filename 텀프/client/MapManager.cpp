@@ -1,8 +1,8 @@
 #include "MapManager.h"
 
 void MapManager::Initialize(int width, int height) {
-    m_width = 200;
-    m_height = 200;
+    m_width = width;
+    m_height = height;
 
 	// 맵 전체를 평지 타일로 초기화
     m_map.resize(m_height, std::vector<TileInfo>(m_width, { 1, 1, false }));
@@ -11,7 +11,7 @@ void MapManager::Initialize(int width, int height) {
     m_tileSprite.setTexture(ResourceManager::GetInstance().GetTexture("tilemap"));
     m_shadowSprite.setTexture(ResourceManager::GetInstance().GetTexture("shadow"));
 
-    for (int i = 0; i < 500; ++i) {
+    for (int i = 0; i < 5'0000; ++i) {
         int rx = rand() % (m_width - 2);
         int ry = rand() % (m_height - 2);
 
@@ -27,14 +27,13 @@ void MapManager::Draw(sf::RenderWindow& window, const sf::View& camera) {
 	sf::Vector2f size = camera.getSize();
 
 	int startX = std::max(0, static_cast<int>((center.x - size.x / 2.0f) / TILE_SIZE) - 1);
-	int endX = std::min(m_width - 1, static_cast<int>((center.x + size.x / 2.0f) / TILE_SIZE) + 1);
-
-	int startY = std::max(0, static_cast<int>((center.y - size.y / 2.0f) / TILE_SIZE) - 1);
-	int endY = std::min(m_height - 1, static_cast<int>((center.y + size.y / 2.0f) / TILE_SIZE) + 1);
+    int startY = std::max(0, static_cast<int>((center.y - size.y / 2.0f) / TILE_SIZE) - 1);
+	int endX = std::min(m_width - 1, static_cast<int>((center.x + size.x / 2.0f) / TILE_SIZE) + 2);
+	int endY = std::min(m_height - 1, static_cast<int>((center.y + size.y / 2.0f) / TILE_SIZE) + 2);
 
     // 1. 평지(Flat Ground) 먼저 그리기
-    for (int y = 0; y < m_height; ++y) {
-        for (int x = 0; x < m_width; ++x) {
+    for (int y = startY; y < endY; ++y) {
+        for (int x = startX; x < endX; ++x) {
             if (m_map[y][x].sheetX != -1 && !m_map[y][x].isElevated) {
                 // 시트에서 64x64만큼 잘라내기
                 m_tileSprite.setTextureRect(sf::IntRect(m_map[y][x].sheetX * TILE_SIZE, m_map[y][x].sheetY * TILE_SIZE, TILE_SIZE, TILE_SIZE));
@@ -45,21 +44,14 @@ void MapManager::Draw(sf::RenderWindow& window, const sf::View& camera) {
     }
 
     // 2. 그림자(Shadow) 그리기 (언덕의 한 칸 아래에 그려야 함)
-    for (int y = 0; y < m_height; ++y) {
-        for (int x = 0; x < m_width; ++x) {
+    for (int y = startY; y < endY; ++y) {
+        for (int x = startX; x < endX; ++x) {
             if (m_map[y][x].isElevated) {
-                // 가이드북 규칙: 그림자는 언덕보다 Y축으로 1칸(+64px) 아래에 그려야 입체감이 생김!
-                // 128x128 텍스처이므로, 중심을 맞추기 위해 x좌표도 살짝 조정해줍니다.
-                m_shadowSprite.setPosition((x * TILE_SIZE) - 32, (y * TILE_SIZE) + TILE_SIZE - 32);
+                // 그림자 먼저 그리기
+                m_shadowSprite.setPosition(x * TILE_SIZE - 32, y * TILE_SIZE + 64 - 32);
                 window.draw(m_shadowSprite);
-            }
-        }
-    }
 
-    // 3. 언덕(Elevated Ground) 그리기
-    for (int y = 0; y < m_height; ++y) {
-        for (int x = 0; x < m_width; ++x) {
-            if (m_map[y][x].isElevated) {
+                // 언덕 그리기
                 m_tileSprite.setTextureRect(sf::IntRect(m_map[y][x].sheetX * TILE_SIZE, m_map[y][x].sheetY * TILE_SIZE, TILE_SIZE, TILE_SIZE));
                 m_tileSprite.setPosition(x * TILE_SIZE, y * TILE_SIZE);
                 window.draw(m_tileSprite);

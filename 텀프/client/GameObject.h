@@ -5,7 +5,7 @@
 #include "ResourceManager.h" // 텍스처를 가져오기 위해 포함
 
 // 애니메이션 상태 열거형
-enum class AnimState { IDLE, RUN, ATTACK1, ATTACK2, GUARD };
+enum class AnimState { IDLE, RUN, ATTACK };
 enum class ObjectType { PLAYER, SKELETON };
 
 class GameObject {
@@ -38,6 +38,7 @@ public:
     int maxFrames = 8;          // 총 프레임 개수 (Idle 기준)
 
 	float scale = 1.0f;            // 스프라이트 크기 조절용
+    bool isFirstSpawn = true;
 
     // 생성자 (ResourceManager 적용 완료)
     GameObject() : id(-1), x(0), y(0), hp(0), max_hp(0), exp(0), level(1) {
@@ -51,6 +52,16 @@ public:
     }
 
     virtual void setPosition(int new_x, int new_y) {
+        if (isFirstSpawn) {
+            x = new_x;
+			y = new_y;
+			prev_x = new_x;
+            prev_y = new_y;
+            sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
+            isFirstSpawn = false;
+			return;
+        }
+
         if (x != new_x || y != new_y) {
             isWalking = true;
             walkTimer.restart();
@@ -70,8 +81,13 @@ public:
         sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
     }
 
-    void doAttack1() {
-        currentState = AnimState::ATTACK1;
+    void setDirection(unsigned char dir) {
+        if (dir == 2) sprite.setScale(-scale, scale); // Left
+		else sprite.setScale(scale, scale); // Right
+    }
+
+    void doAttack() {
+        currentState = AnimState::ATTACK;
         isActionPlaying = true;
         currentFrame = 0;
         animClock.restart();
@@ -93,98 +109,10 @@ public:
         sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
     }
 
-    void doAttack2() {
-        currentState = AnimState::ATTACK2;
-        isActionPlaying = true;
-        currentFrame = 0;
-        animClock.restart();
-
-        switch (objectType) {
-        case ObjectType::PLAYER: {
-            sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_attack2"));
-            maxFrames = 6;
-            break;
-        }
-        case ObjectType::SKELETON: {
-            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_attack2"));
-            maxFrames = 8;
-            break;
-        }
-        }
-
-        sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
-    }
-
-    void doGuard() {
-        guardTimer.restart();
-
-        if (currentState != AnimState::GUARD) {
-            currentState = AnimState::GUARD;
-            isActionPlaying = true;
-            currentFrame = 0;
-            animClock.restart();
-        }
-
-        switch (objectType) {
-        case ObjectType::PLAYER: {
-            sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_guard"));
-            maxFrames = 6;
-            break;
-        }
-        case ObjectType::SKELETON: {
-            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_guard"));
-            maxFrames = 4;
-            break;
-        }
-        }
-
-        sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
-    }
-
-    void forceStopAction() {
-        if (currentState == AnimState::GUARD) {
-            isActionPlaying = false;
-            currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
-            currentFrame = 0;
-
-            switch (objectType) {
-            case ObjectType::PLAYER: {
-                sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
-                maxFrames = isWalking ? 6 : 8;
-				break;
-            }
-            case ObjectType::SKELETON: {
-				sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
-                maxFrames = 4;
-				break;
-            }
-            }
-            sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
-        }
-    }
-
     virtual void updateAnimation() {
-        if (isWalking && walkTimer.getElapsedTime().asSeconds() > 0.15f) {
+        if (isWalking && walkTimer.getElapsedTime().asSeconds() > 0.55f) {
             isWalking = false;
 		}
-
-        if (currentState == AnimState::GUARD && guardTimer.getElapsedTime().asSeconds() > 0.3f) {
-            isActionPlaying = false;
-			currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
-            currentFrame = 0;
-
-            switch (objectType) {
-            case ObjectType::PLAYER: {
-                sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
-                maxFrames = isWalking ? 6 : 8;
-                break;
-            }
-            case ObjectType::SKELETON: {
-                sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
-                maxFrames = 4;
-            }
-        }
-	}
 
         // 1. 현재 상태에 맞춰 애니메이션 속도 세팅
         float animSpeed = 0.1f;
@@ -193,33 +121,26 @@ public:
 
         // 2. 타이머 틱 (시간이 다 되면 프레임 1증가)
         if (animClock.getElapsedTime().asSeconds() > animSpeed) {
-            if (currentState == AnimState::GUARD && currentFrame == maxFrames - 1) {
-                currentFrame = 0;
-            }
-			else currentFrame++;
+            currentFrame++;
 
             // 단발성 액션이 끝까지 재생되었을 때
             if (isActionPlaying && currentFrame >= maxFrames) {
-                if (currentState == AnimState::GUARD) {
-					currentFrame = maxFrames - 1;
+                isActionPlaying = false;
+                currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
+                currentFrame = 0;
+                switch (objectType) {
+                case ObjectType::PLAYER: {
+                    sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
+                    maxFrames = isWalking ? 6 : 8;
+                    break;
                 }
-                else {
-					isActionPlaying = false;
-                    currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
-                    currentFrame = 0;
-                    switch (objectType) {
-                    case ObjectType::PLAYER: {
-                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
-                        maxFrames = isWalking ? 6 : 8;
-                        break;
-                    }
-                    case ObjectType::SKELETON: {
-                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
-                        maxFrames = 4;
-                        break;
-                    }
-                    }
+                case ObjectType::SKELETON: {
+                    sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
+                    maxFrames = 4;
+                    break;
                 }
+                }
+            
 				
             } 
             // 일반 루프 애니메이션일 때는 처음으로 반복

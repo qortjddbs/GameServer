@@ -24,9 +24,6 @@ enum PACKET_TYPE {
 	// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
 	C2S_LOGOUT,			// Client to Server: Logout request
 
-	C2S_GUARD,			// 방어 추가
-	C2S_STOP_ACTION, 	// 행동 중지 패킷 (방어 중지용)
-
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
 	// 로그인 결과 패킷 (성공 여부와 메시지 포함)
 	S2C_AVATAR_INFO,	//	Server to Client: Avatar information
@@ -67,18 +64,6 @@ struct C2S_Attack {
 	unsigned char attackType; // 1: Attack1, 2: Attack2
 };
 
-// 방어 패킷 추가
-struct C2S_Guard {
-	unsigned char size;
-	PACKET_TYPE   type;
-};
-
-// 방어 중지 패킷 추가
-struct C2S_StopAction {
-	unsigned char size;
-	PACKET_TYPE   type;
-};
-
 struct C2S_Teleport {
 	unsigned char size;
 	PACKET_TYPE   type;
@@ -105,6 +90,7 @@ struct S2C_AvatarInfo {
 	int visualId; // for future use (different visual appearances)
 	short x;
 	short y;
+	unsigned char direction; // 방향 추가 - 0: Up, 1: Down, 2: Left, 3: Right
 	int hp;
 	int max_hp;
 	unsigned long long exp;
@@ -119,6 +105,7 @@ struct S2C_AddObject {
 	char obj_name[MAX_NAME_LEN];
 	short x;
 	short y;
+	unsigned char direction; // 방향 추가 - 0: Up, 1: Down, 2: Left, 3: Right
 	int hp;
 	int max_hp;
 	unsigned long long exp;

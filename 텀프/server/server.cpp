@@ -1,3 +1,5 @@
+#define NOMINMAX
+
 #include <iostream>
 #include <WinSock2.h>
 #include <MSWSock.h>
@@ -6,6 +8,9 @@
 #include <vector>
 #include <queue>
 #include <chrono>
+#include <algorithm>
+#include <shared_mutex>
+#include <unordered_set>
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_queue.h>
 #include "protocol_2026.h"
@@ -13,7 +18,19 @@
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "mswsock.lib")
 
-enum class EventType { EVENT_MOVE };
+constexpr int VIEW_RANGE = 7;         // 시야 반경 (8칸)
+constexpr int REGION_SIZE = 10;       // 한 지역(Region)의 가로/세로 길이
+constexpr int MAX_REGION_X = WORLD_WIDTH / REGION_SIZE + 1;
+constexpr int MAX_REGION_Y = WORLD_HEIGHT / REGION_SIZE + 1;
+
+struct Region {
+	std::unordered_set<int> objects; // 이 지역에 들어있는 플레이어/NPC들의 ID
+	std::shared_mutex lock;          // Read(검색)와 Write(이동)를 분리해서 처리할 고급 자물쇠
+};
+
+Region g_regions[MAX_REGION_X][MAX_REGION_Y];
+
+enum class EventType { EVENT_MOVE, EVENT_RESPAWN };
 
 struct TimerEvent 
 {
@@ -45,7 +62,7 @@ struct IOContext
 };
 
 // 세션 상태 관리 정의
-enum class SessionState { FREE, CONNECTED, INGAME };
+enum class SessionState { FREE, CONNECTED, INGAME, DEAD };
 
 // 개별 플레이어를 나타내는 세션 클래스
 class Session
@@ -60,11 +77,14 @@ public:
 	unsigned int playerNum = 0;			// 이 방을 다녀간 사람 수 (고유 ID용)
 
 	short x = 0, y = 0;
+	unsigned char direction = 3;	// 기본 방향 오른쪽
 	int hp = 100, max_hp = 100;
 	unsigned long long exp = 0;
 	unsigned char level = 1;
 	char name[MAX_NAME_LEN]{};
-	bool isGuarding = false;
+
+	std::unordered_set<int> viewList;	// 내 화면에 보이고 있는 객체들의 ID
+	std::mutex viewLock;				// 시야 목록 전용 자물쇠
 
 	IOContext recvContext{ IO_OP::RECV };
 	int prevRemainBytes = 0;
@@ -78,7 +98,8 @@ public:
 		prevRemainBytes = 0;
 		memset(name, 0, sizeof(name));
 
-		isGuarding = false;
+		std::lock_guard<std::mutex> vlLock(viewLock);
+		viewList.clear();
 
 		playerNum++;	// 손님이 바뀔 때마다 세대 번호 증가
 		state.store(SessionState::FREE);
@@ -106,6 +127,46 @@ public:
 		return (static_cast<unsigned long long>(playerNum) << 32) | sessionIndex;
 	}
 };
+
+// 시야 및 Region 헬퍼 함수
+// 해당 좌표가 속한 Region 배열의 X, Y 인덱스를 안전하게 계산
+inline short GetRegionX(short x) {
+	return std::max((short)0, std::min((short)(MAX_REGION_X - 1), (short)(x / REGION_SIZE)));
+}
+
+inline short GetRegionY(short y) {
+	return std::max((short)0, std::min((short)(MAX_REGION_Y - 1), (short)(y / REGION_SIZE)));
+}
+
+// 두 객체가 서로 시야(VIEW_RANGE) 내에 있는지 확인 (맨해튼 거리 기준)
+inline bool IsInView(short x1, short y1, short x2, short y2) {
+	return (abs(x1 - x2) <= VIEW_RANGE) && (abs(y1 - y2) <= VIEW_RANGE);
+}
+
+// 특정 좌표를 기준으로 "나를 포함한 주변 9개 Region"에 있는 모든 객체 ID를 긁어오는 함수
+std::unordered_set<int> GetNearbyObjects(short cur_x, short cur_y) {
+	std::unordered_set<int> nearby_objs;
+	short rx = GetRegionX(cur_x);
+	short ry = GetRegionY(cur_y);
+
+	// 내 Region을 중심으로 3x3 (총 9개) Region을 뒤집니다.
+	for (int dy = -1; dy <= 1; ++dy) {
+		for (int dx = -1; dx <= 1; ++dx) {
+			short nx = rx + dx;
+			short ny = ry + dy;
+
+			// 맵 범위를 벗어나는 Region은 무시
+			if (nx < 0 || nx >= MAX_REGION_X || ny < 0 || ny >= MAX_REGION_Y) continue;
+
+			// 읽기 전용 락(shared_lock)을 걸고 안전하게 ID들을 복사해 옵니다.
+			std::shared_lock<std::shared_mutex> read_lock(g_regions[nx][ny].lock);
+			for (int id : g_regions[nx][ny].objects) {
+				nearby_objs.insert(id);
+			}
+		}
+	}
+	return nearby_objs;
+}
 
 // 전체 서버를 총괄하는 메인 엔진 클래스
 class IocpServer
@@ -152,28 +213,6 @@ public:
 			AddTimerEvent(npc_id, EventType::EVENT_MOVE, rand() % 2000 + 1000);
 		}
 	}
-
-	void AddTimerEvent(int obj_id, EventType type, int delay_ms) {
-		TimerEvent ev;
-		ev.object_id = obj_id;
-		ev.type = type;
-		ev.exec_time = std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
-
-		std::lock_guard<std::mutex> lock(timer_mock);
-		timer_queue.push(ev);
-	}
-
-	// 배열 인덱스 초과를 막는 라우터
-	Session* GetSession(int id) {
-		if (id < MAX_PLAYERS) {
-			return sessions[id];		// 유저는 그대로
-		}
-		else if (id >= NPC_ID_START && id < NPC_ID_START + NUM_NPCS) {
-			return sessions[MAX_PLAYERS + (id - NPC_ID_START)];			// NPC는 100만을 빼서 접근!
-		}
-		return nullptr;
-	}
-
 	bool Initialize() {
 		// 윈도우 소켓 라이브러리 초기화 (Winsock 버전 2.2 사용하겠다는 뜻)
 		WSADATA wsaData;
@@ -215,7 +254,7 @@ public:
 			workers.emplace_back(&IocpServer::WorkerLoop, this);
 			// push_back은 객체를 넘기고, emplace_back은 객체 생성에 필요한 인자를 넘김
 		}
-		std::cout << "Server Core Successfully Started on Port" << PORT << std::endl;
+		// std::cout << "Server Core Successfully Started on Port " << PORT << std::endl;
 	}
 
 	void Join() {
@@ -223,6 +262,208 @@ public:
 	}
 
 private:
+	void AddTimerEvent(int obj_id, EventType type, int delay_ms) {
+		TimerEvent ev;
+		ev.object_id = obj_id;
+		ev.type = type;
+		ev.exec_time = std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
+
+		std::lock_guard<std::mutex> lock(timer_mock);
+		timer_queue.push(ev);
+	}
+
+	// 배열 인덱스 초과를 막는 라우터
+	Session* GetSession(int id) {
+		if (id < MAX_PLAYERS) {
+			return sessions[id];		// 유저는 그대로
+		}
+		else if (id >= NPC_ID_START && id < NPC_ID_START + NUM_NPCS) {
+			return sessions[MAX_PLAYERS + (id - NPC_ID_START)];			// NPC는 100만을 빼서 접근!
+		}
+		return nullptr;
+	}
+
+	bool IsPlayer(int id) { return id < MAX_PLAYERS; }
+
+	void SendAddObject(int to_id, int target_id) {
+		Session* to = GetSession(to_id);
+		Session* target = GetSession(target_id);
+		if (!to || !target || to->state.load() != SessionState::INGAME || target->state.load() != SessionState::INGAME) return;
+
+		S2C_AddObject packet;
+		packet.size = sizeof(S2C_AddObject);
+		packet.type = S2C_ADD_OBJECT;
+		packet.object_id = target->id;
+		packet.visual_id = IsPlayer(target_id) ? 0 : 1;
+		strcpy_s(packet.obj_name, target->name);
+		packet.x = target->x;
+		packet.y = target->y;
+		packet.direction = target->direction;
+		packet.hp = target->hp;
+		packet.max_hp = target->max_hp;
+		packet.exp = target->exp;
+		packet.level = target->level;
+		to->SendPacket(&packet);
+	}
+
+	void SendRemoveObject(int to_id, int target_id) {
+		Session* to = GetSession(to_id);
+		if (!to || to->state.load() != SessionState::INGAME) return;
+
+		S2C_RemoveObject packet;
+		packet.size = sizeof(S2C_RemoveObject);
+		packet.type = S2C_REMOVE_OBJECT;
+		packet.object_id = target_id;
+		to->SendPacket(&packet);
+	}
+
+	void SendMoveObject(int to_id, int target_id, short nx, short ny) {
+		Session* to = GetSession(to_id);
+		if (!to || to->state.load() != SessionState::INGAME) return;
+
+		S2C_MoveObject packet;
+		packet.size = sizeof(S2C_MoveObject);
+		packet.type = S2C_MOVE_OBJECT;
+		packet.object_id = target_id;
+		packet.x = nx;
+		packet.y = ny;
+		packet.move_time = 0;
+		to->SendPacket(&packet);
+	}
+
+	void MoveObject(int id, short nx, short ny) {
+		Session* obj = GetSession(id);
+		if (!obj || obj->state.load() != SessionState::INGAME) return;
+
+		short old_x = obj->x;
+		short old_y = obj->y;
+
+		// 실제 좌표 변경
+		{
+			std::lock_guard<std::mutex> lock(obj->sessionLock);
+			obj->x = nx;
+			obj->y = ny;
+		}
+
+		// Region 이동 처리
+		short old_rx = GetRegionX(old_x);
+		short old_ry = GetRegionY(old_y);
+		short new_rx = GetRegionX(nx);
+		short new_ry = GetRegionY(ny);
+
+		if (old_rx != new_rx || old_ry != new_ry) {
+			// Region이 바뀌었으면, 기존 Region에서 나가고 새 Region에 들어감
+			{
+				std::unique_lock<std::shared_mutex> wl(g_regions[old_rx][old_ry].lock);
+				g_regions[old_rx][old_ry].objects.erase(id);
+			}
+			{
+				std::unique_lock<std::shared_mutex> wl(g_regions[new_rx][new_ry].lock);
+				g_regions[new_rx][new_ry].objects.insert(id);
+			}
+		}
+
+		// 기존 시야 복사
+		std::unordered_set<int> old_view;
+		{
+			std::lock_guard<std::mutex> vl(obj->viewLock);
+			old_view = obj->viewList;
+		}
+
+		// 새로운 시야 계산 (주변 9개 Region 검색)
+		std::unordered_set<int> new_view;
+		auto near_objs = GetNearbyObjects(nx, ny);
+		for (int n_id : near_objs) {
+			if (n_id == id) continue;	// 자기 자신은 시야에서 제외
+			Session* target = GetSession(n_id);
+			if (target && target->state.load() == SessionState::INGAME && IsInView(nx, ny, target->x, target->y)) {
+				new_view.insert(n_id);
+			}
+		}
+
+		// 차이점 비교 및 패킷 발송
+		for (int n_id : new_view) {
+			if (old_view.count(n_id) == 0) {		// 새로 발견
+				if (IsPlayer(id)) SendAddObject(id, n_id);	// 내가 유저면 새로 보이는 객체 정보 보내기
+				if (IsPlayer(n_id)) SendAddObject(n_id, id);	// 새로 보이는 객체가 유저면 그 유저한테 내 정보 보내기
+			}
+			else {		// 기존에도 있던 객체
+				if (IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny);	// 기존에 보이던 객체 위치만 업데이트
+			}
+		}
+
+		for (int o_id : old_view) {
+			if (new_view.count(o_id) == 0) {		// 시야에서 벗어남
+				if (IsPlayer(id)) SendRemoveObject(id, o_id);	// 내가 유저면 더이상 보이지 않는 객체 정보 삭제
+				if (IsPlayer(o_id)) SendRemoveObject(o_id, id);	// 더이상 보이지 않는 객체가 유저면 그 유저한테 내 정보 제거하라고 보내기
+			}
+		}
+
+		{
+			std::lock_guard<std::mutex> vl(obj->viewLock);
+			obj->viewList = new_view;
+		}
+
+		if (IsPlayer(id)) SendMoveObject(id, id, nx, ny);	// 내가 유저면 내 위치 업데이트 패킷도 보내기
+	}
+
+	// 나를 보고 있는 모든 플레이어에게 패킷을 보내는 함수
+	void BroadcastToViewers(int my_id, void* packet) {
+		Session* me = GetSession(my_id);
+		if (!me) return;
+		std::unordered_set<int> my_view;
+		{
+			std::lock_guard<std::mutex> vl(me->viewLock);
+			my_view = me->viewList;
+		}
+
+		for (int viewer : my_view) {
+			if (IsPlayer(viewer)) {
+				Session* vSession = GetSession(viewer);
+				if (vSession) vSession->SendPacket(packet);
+			}
+		}
+	}
+
+	// 객체(플레이어, 몬스터) 사망 시 호출되는 완전 삭제 함수
+	void KillObject(int id) {
+		Session* target = GetSession(id);
+		if (!target) return;
+		target->state.store(SessionState::DEAD);
+
+		// Region에서 제거
+		short rx = GetRegionX(target->x);
+		short ry = GetRegionY(target->y);
+		{
+			std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+			g_regions[rx][ry].objects.erase(id);
+		}
+
+		// 몬스터를 보고 있던 플레이어들의 화면에서 몬스터 제거
+		std::unordered_set<int> my_view;
+		{
+			std::lock_guard<std::mutex> vl(target->viewLock);
+			my_view = target->viewList;
+		}
+
+		for (int viewer : my_view) {
+			if (IsPlayer(viewer)) SendRemoveObject(viewer, id);
+			
+			// 상대방의 뷰리스트에서도 나 제거
+			Session* vSession = GetSession(viewer);
+			if (vSession) {
+				std::lock_guard<std::mutex> vl(vSession->viewLock);
+				vSession->viewList.erase(id);
+			}
+		}
+
+		// 죽은 객체 뷰리스트 비우기
+		{
+			std::lock_guard<std::mutex> vl(target->viewLock);
+			target->viewList.clear();
+		}
+	}
+
 	void TimerLoop() {
 		while (true) {
 			std::chrono::system_clock::time_point now = std::chrono::system_clock::now();
@@ -244,6 +485,9 @@ private:
 			if (has_event) {
 				if (top_event.type == EventType::EVENT_MOVE) {
 					ProcessNpcMove(top_event.object_id);	// NPC AI 로직 실행
+				} 
+				else if (top_event.type == EventType::EVENT_RESPAWN) {
+					ProcessNpcRespawn(top_event.object_id);	// 몬스터 리스폰
 				}
 				else {
 					// 아직 처리할 이벤트가 없으면 쓰레드 잠깐 재우기
@@ -269,25 +513,45 @@ private:
 
 		// 맵 밖으로 안 나가게 방어
 		if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
-			{
-				std::lock_guard<std::mutex> lock(npc->sessionLock);
-				npc->x = nx;
-				npc->y = ny;
-			}
-
-			// 주변 유저들에게 이동했다고 알려주기
-			S2C_MoveObject resMove;
-			resMove.size = sizeof(S2C_MoveObject);
-			resMove.type = S2C_MOVE_OBJECT;
-			resMove.object_id = npc_id;
-			resMove.x = nx;
-			resMove.y = ny;
-			resMove.move_time = 0;
-
-			BroadcastPacket(&resMove);
+			if (nx < npc->x) npc->direction = 2;
+			else if (nx > npc->x) npc->direction = 3;
+			
+			MoveObject(npc_id, nx, ny);
 		}
 
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, rand() % 2000 + 1000);	// 다음 이동 예약
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약
+	}
+
+	void ProcessNpcRespawn(int npc_id) {
+		Session* npc = GetSession(npc_id);
+		if (!npc) return;
+
+		std::lock_guard<std::mutex> lock(npc->sessionLock);
+		npc->hp = npc->max_hp;
+		npc->x = rand() % WORLD_WIDTH;
+		npc->y = rand() % WORLD_HEIGHT;
+		npc->state.store(SessionState::INGAME);
+
+		// Region 재등록 및 뷰리스트 갱신
+		short rx = GetRegionX(npc->x);
+		short ry = GetRegionY(npc->y);
+		{
+			std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+			g_regions[rx][ry].objects.insert(npc_id);
+		}
+
+		auto near_objs = GetNearbyObjects(npc->x, npc->y);
+		for (int n_id : near_objs) {
+			if (IsPlayer(n_id)) {
+				Session* target = GetSession(n_id);
+				if (target && target->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, target->x, target->y)) {
+					// 리스폰한 NPC가 플레이어 시야에 있으면 추가 패킷 보내기
+					SendAddObject(n_id, npc_id);
+				}
+			}
+		}
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 이동도 같이 예약
+		std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
 	}
 
 	void RegisterAccept() {
@@ -341,7 +605,7 @@ private:
 			if (!result || bytesTransferred == 0 && ioCtx->opType != IO_OP::ACCEPT) {
 				if (completionKey != 10000) {
 					Disconnect(static_cast<int>(completionKey));
-					std::cout << "[Disconnect] Player " << completionKey << " left." << std::endl;
+					// std::cout << "[Disconnect] Player " << completionKey << " left." << std::endl;
 				}
 				if (ioCtx->opType == IO_OP::SEND) delete ioCtx;		// 보내던 중 끊겼으면 메모리 누수 방지 위해 영수증 폐기
 				continue;	// 에러가 났으니 아래 로직은 무시하고 다시 GQCS 수면하러 돌아감
@@ -369,7 +633,7 @@ private:
 						WSARecv(newClientSocket, &session->recvContext.wsabuf, 1, nullptr, &flags,
 							&session->recvContext.overlapped, nullptr);
 
-						std::cout << "[Accept] New player connected. Assigned Session ID: " << allocatedId << std::endl;
+						// std::cout << "[Accept] New player connected. Assigned Session ID: " << allocatedId << std::endl;
 
 					}
 				}
@@ -389,16 +653,6 @@ private:
 				delete ioCtx;
 				break;
 			}
-			}
-		}
-	}
-
-	void BroadcastPacket(void* packet) {
-		for (int i = 0; i < MAX_PLAYERS; ++i) {
-			Session* session = GetSession(i);
-
-			if (session != nullptr && session->state.load() == SessionState::INGAME) {
-				session->SendPacket(packet);
 			}
 		}
 	}
@@ -453,105 +707,44 @@ private:
 
 		// 로그인 처리
 		if (type == C2S_LOGIN) {
-			if (session->state.load() != SessionState::CONNECTED) return;
-
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
-			session->x = 100;
-			session->y = 100;
+			session->x = rand() % 200;
+			session->y = rand() % 200;
 			session->state = SessionState::INGAME;
 
-			// 1. 결과 패킷 발송
-			S2C_LoginResult res;
-			res.size = sizeof(res);
-			res.type = S2C_LOGIN_RESULT;
-			res.success = true;
-			strcpy_s(res.message, "Welcome!");
+			// 로그인 성공 및 아바타 정보 전송
+			S2C_LoginResult res = { sizeof(res), S2C_LOGIN_RESULT, true, "Welcome!" };
 			session->SendPacket(&res);
 
-			// 2. 아바타 정보 발송
-			S2C_AvatarInfo info;
-			info.size = sizeof(info);
-			info.type = S2C_AVATAR_INFO;
-			info.playerId = sessionId;
-			info.x = session->x;
-			info.y = session->y;
-			info.hp = session->hp;
-			info.max_hp = session->max_hp;
-			info.level = session->level;
-			info.exp = session->exp;
+			S2C_AvatarInfo info = { sizeof(info), S2C_AVATAR_INFO, sessionId, 0, session->x, session->y, session->direction, session->hp, session->max_hp, session->exp, session->level };
 			session->SendPacket(&info);
 
-			std::cout << "[Login] Player " << session->name << " entered at (" << session->x << ", " << session->y << ")" << std::endl;
+			// 로그인 시 현재 좌표를 Region에 등록 + 주변 객체 목록 갱신
+			short rx = GetRegionX(session->x);
+			short ry = GetRegionY(session->y);
+			{
+				std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+				g_regions[rx][ry].objects.insert(sessionId);
+			}
 
-			// 맵에 있던 NPC들 나에게 보여주기
-			for (int i = 0; i < NUM_NPCS; ++i) {
-				Session* npcSession = GetSession(NPC_ID_START + i);
-				if (npcSession && npcSession->state.load() == SessionState::INGAME) {
-					S2C_AddObject addNpc;
-					addNpc.size = sizeof(addNpc);
-					addNpc.type = S2C_ADD_OBJECT;
-					addNpc.object_id = npcSession->id;
-					addNpc.visual_id = 0;	// 나중에 몬스터 종류별로 다른 비주얼 아이디 줄 수 있게끔
-					addNpc.x = npcSession->x;
-					addNpc.y = npcSession->y;
-					addNpc.hp = npcSession->hp;
-					addNpc.max_hp = npcSession->max_hp;
-					addNpc.level = npcSession->level;
-					strcpy_s(addNpc.obj_name, npcSession->name);
+			auto near_objs = GetNearbyObjects(session->x, session->y);
+			for (int n_id : near_objs) {
+				if (n_id == sessionId) continue;
+				Session* target = GetSession(n_id);
+				if (target && target->state.load() == SessionState::INGAME && IsInView(session->x, session->y, target->x, target->y)) {
+					std::lock_guard<std::mutex> vl(session->viewLock);
+					session->viewList.insert(n_id);
 
-					session->SendPacket(&addNpc);
+					SendAddObject(sessionId, n_id);	// 나한테 새로 보이는 객체 정보 보내기
+					if (IsPlayer(n_id)) SendAddObject(n_id, sessionId);	// 새로 보이는 객체가 유저면 그 유저한테 내 정보 보내기
 				}
 			}
 
-			// 맵에 이미 있던 '기존 플레이어들'을 나에게 보여주기
-			for (int i = 0; i < MAX_PLAYERS; ++i) {
-				if (i == sessionId) continue;
-				Session* otherSession = GetSession(i);
-				if (otherSession && otherSession->state.load() == SessionState::INGAME) {
-					S2C_AddObject addOther;
-					addOther.size = sizeof(addOther);
-					addOther.type = S2C_ADD_OBJECT;
-					addOther.object_id = otherSession->id;
-					addOther.visual_id = 0;
-					addOther.x = otherSession->x;
-					addOther.y = otherSession->y;
-					addOther.hp = otherSession->hp;
-					addOther.max_hp = otherSession->max_hp;
-					addOther.level = otherSession->level;
-					strcpy_s(addOther.obj_name, otherSession->name);
-
-					session->SendPacket(&addOther); // 나에게 전송
-				}
-			}
-
-			// 방금 접속한 나를 다른 플레이어들에게도 보여주기
-			S2C_AddObject addMe;
-			addMe.size = sizeof(addMe);
-			addMe.type = S2C_ADD_OBJECT;
-			addMe.object_id = session->id;
-			addMe.visual_id = 0;
-			addMe.x = session->x;
-			addMe.y = session->y;
-			addMe.hp = session->hp;
-			addMe.max_hp = session->max_hp;
-			addMe.level = session->level;
-			strcpy_s(addMe.obj_name, session->name);
-
-			// 나를 제외한 모든 접속자에게 내 정보 브로드캐스트
-			for (int i = 0; i < MAX_PLAYERS; ++i) {
-				if (i == sessionId) continue;
-				Session* otherSession = GetSession(i);
-				if (otherSession && otherSession->state.load() == SessionState::INGAME) {
-					otherSession->SendPacket(&addMe);
-				}
-			}
+			// std::cout << "[Login] Player " << session->name << " entered at (" << session->x << ", " << session->y << ")" << std::endl;
 		}
-		// 인게임 패킷 (이동, 공격, 방어)
-		else {
-			// 로그인을 안 한(CONNECTED) 놈이 움직이거나 공격하려고 하면 입구 컷
-			if (session->state.load() != SessionState::INGAME) return;
-
+		// 인게임 패킷 (이동, 공격)
+		else if (session->state.load() == SessionState::INGAME) {
 			// 이동 패킷 처리
 			if (type == C2S_MOVE) {
 				C2S_Move* movePacket = reinterpret_cast<C2S_Move*>(packet);
@@ -560,69 +753,83 @@ private:
 				short ny = session->y;
 
 				// 방향에 따른 다음 좌표 계산
-				if (movePacket->direction == 0) ny -= 1;		// Up
-				else if (movePacket->direction == 1) ny += 1;	// Down
-				else if (movePacket->direction == 2) nx -= 1;	// Left
-				else if (movePacket->direction == 3) nx += 1;	// Right
+				 if (movePacket->direction == 0) ny -= 1;		// Up
+				 else if (movePacket->direction == 1) ny += 1;	// Down
+				 else if (movePacket->direction == 2) nx -= 1;	// Left
+				 else if (movePacket->direction == 3) nx += 1;	// Right
 
-				// 서버 사이드 검증: 맵 범위를 벗어나지 않았는지 확인
 				if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
-					{
-						std::lock_guard<std::mutex> lock(session->sessionLock);
-						session->x = nx;
-						session->y = ny;
-					}
-
-					// 이동 결과를 클라이언트에게 발송 (브로드캐스트)
-					S2C_MoveObject resMove;
-					resMove.size = sizeof(resMove);
-					resMove.type = S2C_MOVE_OBJECT;
-					resMove.object_id = sessionId;
-					resMove.x = nx;
-					resMove.y = ny;
-					resMove.move_time = movePacket->move_time;
-
-					// 임시로 브로드캐스트
-					BroadcastPacket(&resMove);
+					if (nx < session->x) session->direction = 2;
+					else if (nx > session->x) session->direction = 3;
+					
+					MoveObject(sessionId, nx, ny);
 				}
 			}
+			// 공격 패킷 처리
 			else if (type == C2S_ATTACK) {
-				// 공격 패킷 처리
 				C2S_Attack* atk = reinterpret_cast<C2S_Attack*>(packet);
 
-				S2C_Action actionPacket;
-				memset(&actionPacket, 0, sizeof(actionPacket));
+				// 1. 공격 패킷 뷰리스트에 있는 객체들한테 보내기
+				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, sessionId, atk->attackType };
+				BroadcastToViewers(sessionId, &actionPacket);
+				session->SendPacket(&actionPacket);	// 공격하는 본인한테도 패킷 보내기
 
-				actionPacket.size = sizeof(actionPacket);
-				actionPacket.type = S2C_ACTION;
-				actionPacket.object_id = sessionId;
-				actionPacket.actionType = 1;
+				// 2. 데미지 및 사망 판정 로직 (+경험치)
+				int exp_gained = 0;
 
-				actionPacket.actionType = atk->attackType;
+				// 맵 전체가 아니라 시야 범위 내의 객체들한테만 공격 패킷 보내기
+				std::unordered_set<int> my_view;
+				{
+					std::lock_guard<std::mutex> vl(session->viewLock);
+					my_view = session->viewList;
+				}
 
-				BroadcastPacket(&actionPacket);
+				for (int target_id : my_view) {
+					if (!IsPlayer(target_id)) {		// 몬스터만 공격 가능
+						Session* npc = GetSession(target_id);
+						if (npc && npc->state.load() == SessionState::INGAME) {
+							// 4방향 판정 (맨해튼 거리 1)
+							int dx = abs(session->x - npc->x);
+							int dy = abs(session->y - npc->y);
+							if (dx + dy == 1) {
+								std::lock_guard<std::mutex> npcLock(npc->sessionLock);
+								npc->hp -= 35;	// 임시 데미지
+
+								if (npc->hp <= 0) {
+									npc->hp = 0;
+									exp_gained += (npc->level * npc->level * 2);	// 경험치 획득량 고정
+									KillObject(target_id);	// 몬스터 사망 처리
+									AddTimerEvent(target_id, EventType::EVENT_RESPAWN, 3'0000);	// 30초 뒤에 리스폰하도록 예약
+								}
+								else {
+									S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, target_id, npc->hp, npc->max_hp, npc->exp, npc->level };
+									BroadcastToViewers(target_id, &statusPacket);
+								}
+							}
+						}
+					}
+				}
+
+				// 3. 플레이어 경험치 및 레벨업 처리
+				if (exp_gained > 0) {
+					std::lock_guard<std::mutex> myLock(session->sessionLock);
+					session->exp += exp_gained;
+
+					while (session->exp >= session->level * 100) {
+						session->exp -= session->level * 100;
+						session->level++;
+						session->max_hp += 50;				// 레벨업 보상 (최대체력 증가)
+						session->hp = session->max_hp;		// 레벨업하면 풀피
+						std::cout << "Level Up! Player " << session->name << " reached level " << session->level << "!" << std::endl;
+					}
+
+					// 내 상태 갱신
+					S2C_StatusChange myStatus = { sizeof(myStatus), S2C_STATUS_CHANGE, sessionId, session->hp, session->max_hp, session->exp, session->level };
+					session->SendPacket(&myStatus);
+					BroadcastToViewers(sessionId, &myStatus);
+				}
+				// session->SendPacket(&actionPacket);	// 공격하는 본인한테도 패킷 보내기
 			} 
-			else if (type == C2S_GUARD) {
-				session->isGuarding = true;
-
-				// 방어 패킷 처리
-				S2C_Action actionPacket;
-				actionPacket.size = sizeof(actionPacket);
-				actionPacket.type = S2C_ACTION;
-				actionPacket.object_id = sessionId;
-				actionPacket.actionType = 3;
-				BroadcastPacket(&actionPacket);
-			}
-			else if (type == C2S_STOP_ACTION) {
-				session->isGuarding = false;
-				// 행동 중지 패킷 처리
-				S2C_Action actionPacket;
-				actionPacket.size = sizeof(actionPacket);
-				actionPacket.type = S2C_ACTION;
-				actionPacket.object_id = sessionId;
-				actionPacket.actionType = 4; // 행동 중지용 액션 타입
-				BroadcastPacket(&actionPacket);
-			}
 		}
 	}
 

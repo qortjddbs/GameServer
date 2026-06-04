@@ -52,6 +52,11 @@ bool LoadAllResources() {
 		return false;
     }
 
+    if (!resMgr.LoadTexture("attack_effect", "Assets/Tiny Swords/Particle FX/Fire_02.png")) {
+        cout << "공격 이펙트 로드 실패!" << endl;
+		return false;
+    }
+
 	return true;
 }
 
@@ -91,6 +96,7 @@ void OnAddObject(char* packet) {
     auto new_obj = std::make_unique<GameObject>();
 	new_obj->id = p->object_id;
 	new_obj->setPosition(p->x, p->y);
+	new_obj->setDirection(p->direction);
 	strcpy_s(new_obj->name, p->obj_name);
 
     // NPC
@@ -144,10 +150,35 @@ void OnAction(char* packet) {
     auto p = reinterpret_cast<S2C_Action*>(packet);
     GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
     if (obj) {
-        if (p->actionType == 1) obj->doAttack1();
-		else if (p->actionType == 2) obj->doAttack2();
-        else if (p->actionType == 3) obj->doGuard();
-		else if (p->actionType == 4) obj->forceStopAction();
+        if (p->actionType == 1) {
+			obj->doAttack();
+
+			auto& gameMgr = GameManager::GetInstance();
+            gameMgr.AddAttackEffect(obj->x, obj->y - 1);
+            gameMgr.AddAttackEffect(obj->x, obj->y + 1);
+            gameMgr.AddAttackEffect(obj->x - 1, obj->y);
+            gameMgr.AddAttackEffect(obj->x + 1, obj->y);
+        }
+    }
+}
+
+// 상태 변경을 처리하는 함수
+void OnStatusChange(char* packet) {
+	auto p = reinterpret_cast<S2C_StatusChange*>(packet);
+	GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
+
+    if (obj) {
+		obj->hp = p->hp;
+		obj->max_hp = p->max_hp;
+		obj->exp = p->exp;
+		obj->level = p->level;
+
+        // 내 캐릭터 정보가 갱신됐으면 콘솔에 출력
+        if (obj->id == GameManager::GetInstance().GetMyId()) {
+            cout << "내 상태 변경 - HP: " << obj->hp << "/" << obj->max_hp
+                 << ", EXP: " << obj->exp
+                 << ", Level: " << static_cast<int>(obj->level) << endl;
+		}
     }
 }
 
@@ -178,6 +209,7 @@ int main() {
 	netMgr.RegisterHandler(S2C_REMOVE_OBJECT, OnRemoveObject);
 	netMgr.RegisterHandler(S2C_MOVE_OBJECT, OnMoveObject);
     netMgr.RegisterHandler(S2C_ACTION, OnAction);
+	netMgr.RegisterHandler(S2C_STATUS_CHANGE, OnStatusChange);
 	
     // ==========================================
 	// [초기화 3] 서버 접속 및 로그인
@@ -199,17 +231,16 @@ int main() {
     // ==========================================
     sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2026 Term Proejct Client");
     window.setFramerateLimit(60);
-	sf::View camera(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
+	//sf::View camera(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
+    sf::View camera(sf::FloatRect(0, 0, 1920, 1440));
 
 	auto& gameMgr = GameManager::GetInstance();
 
     sf::Clock moveTimer;
 	sf::Clock attackTimer;
-	sf::Clock guardTimer;
 
     unsigned char comboStep = 0;
     sf::Clock comboResetTimer;
-
     char lastDir = -1;
 
     // ==========================================
@@ -223,83 +254,31 @@ int main() {
 
         GameObject* myAvatar = gameMgr.GetMyAvatar();
 
-        // 치다가 말았을 때 0.5초가 지나면 콤보 초기화 (다시 1타부터)
-        if (comboStep > 0 && comboStep < 3 && comboResetTimer.getElapsedTime().asSeconds() > 0.5f) {
-            comboStep = 0;
-		}
-
         if (window.hasFocus()) {
-            // C키를 꾹 누르고 있다면
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::C)) {
-                // 3연타를 마쳤다면 긴 쿨타임, 연타 중이라면 짧은 쿨타임
-                float requiredCooldown = (comboStep == 3) ? 0.7f : 0.3f;
+            char currentDir = -1;
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) currentDir = 0;
+            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) currentDir = 1;
+            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) currentDir = 2;
+            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) currentDir = 3;
 
-                if (attackTimer.getElapsedTime().asSeconds() >= requiredCooldown) {
+
+            if (currentDir == -1) lastDir = -1;
+
+            // 연속 키 입력 처리 (이동)
+            if (myAvatar != nullptr) {
+                bool tryAttack = sf::Keyboard::isKeyPressed(sf::Keyboard::A);
+
+                if (tryAttack && attackTimer.getElapsedTime().asSeconds() >= 1.0f && !myAvatar->isActionPlaying) {
                     C2S_Attack attackPacket;
                     memset(&attackPacket, 0, sizeof(attackPacket));
                     attackPacket.size = sizeof(attackPacket);
                     attackPacket.type = C2S_ATTACK;
-
-                    if (comboStep == 0 || comboStep == 3) {
-                        attackPacket.attackType = 1; // 1타
-                        comboStep = 1;
-                    }
-                    else if (comboStep == 1) {
-                        attackPacket.attackType = 2; // 2타
-                        comboStep = 2;
-                    }
-                    else if (comboStep == 2) {
-                        attackPacket.attackType = 1;
-                        comboStep = 3;
-                    }
+                    attackPacket.attackType = 1;
 
                     netMgr.SendPacket(&attackPacket);
                     attackTimer.restart();
-                    comboResetTimer.restart();
                 }
-
-            }
-
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::X)) {
-                if (guardTimer.getElapsedTime().asSeconds() >= 0.1f) {
-                    C2S_Guard guardPacket;
-                    memset(&guardPacket, 0, sizeof(guardPacket));
-                    guardPacket.size = sizeof(guardPacket);
-                    guardPacket.type = C2S_GUARD;
-                    netMgr.SendPacket(&guardPacket);
-                    guardTimer.restart();
-                }
-            }
-            else {
-                if (myAvatar != nullptr && myAvatar->currentState == AnimState::GUARD) {
-                    myAvatar->forceStopAction();
-                    lastDir = -1;
-
-                    C2S_StopAction stopPacket;
-                    stopPacket.size = sizeof(C2S_StopAction);
-                    stopPacket.type = C2S_STOP_ACTION;
-                    netMgr.SendPacket(&stopPacket);
-                }
-            }
-
-            char currentDir = -1;
-            if (!sf::Keyboard::isKeyPressed(sf::Keyboard::C) && !sf::Keyboard::isKeyPressed(sf::Keyboard::X)) {
-                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) currentDir = 0;
-                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) currentDir = 1;
-                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) currentDir = 2;
-                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) currentDir = 3;
-            }
-
-            if (currentDir == -1) lastDir = -1;
-
-            bool isComboProgressing = (comboStep > 0 && comboResetTimer.getElapsedTime().asSeconds() <= 0.5f);
-
-            // 연속 키 입력 처리 (이동)
-            if (myAvatar != nullptr && !myAvatar->isActionPlaying && !isComboProgressing) {
-
-                // 핵심: "방향이 바뀌었거나(처음 누름 포함)" OR "0.1초가 지났을 때"만 발동!
-                if (currentDir != -1 && (currentDir != lastDir || moveTimer.getElapsedTime().asSeconds() >= 0.1f)) {
-
+                else if (currentDir != -1 && !myAvatar->isActionPlaying && moveTimer.getElapsedTime().asSeconds() >= 0.5f) {
                     C2S_Move movePacket;
                     memset(&movePacket, 0, sizeof(movePacket));
                     movePacket.size = sizeof(movePacket);
@@ -307,11 +286,10 @@ int main() {
                     movePacket.direction = currentDir;
 
                     netMgr.SendPacket(&movePacket);
-
-                    moveTimer.restart(); // 시계 리셋
-                    lastDir = currentDir; // 마지막 방향 갱신
+                    moveTimer.restart();
                 }
             }
+            else lastDir = -1;
         }
         
 
@@ -328,7 +306,8 @@ int main() {
 		}
 
 		MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
-        gameMgr.UpdateAndDrawAll(window); // 애니메이션 갱신 및 화면 출력
+		gameMgr.DrawEffects(window);                        // 공격 이펙트 그리기
+        gameMgr.UpdateAndDrawAll(window);                   // 애니메이션 갱신 및 화면 출력
 
 		window.setView(window.getDefaultView());
 
