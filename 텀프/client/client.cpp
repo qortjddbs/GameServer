@@ -7,11 +7,53 @@
 #include "GameManager.h"
 #include "NetworkManager.h"
 #include "ResourceManager.h"
+#include "MapManager.h"
 
 using namespace std;
 
 constexpr int WINDOW_WIDTH = 1024;
 constexpr int WINDOW_HEIGHT = 768;
+
+bool LoadAllResources() {
+	auto& resMgr = ResourceManager::GetInstance();
+
+    // 폰트 로드
+    if (!resMgr.LoadFont("main_font", "cour.ttf")) {
+        cout << "폰트 로드 실패!" << endl;
+        return false;
+    }
+
+    // 플레이어 로드
+    if (!resMgr.LoadTexture("player_idle", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Idle.png") ||
+        !resMgr.LoadTexture("player_run", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Run.png") ||
+        !resMgr.LoadTexture("player_attack1", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack1.png") ||
+        !resMgr.LoadTexture("player_attack2", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack2.png") ||
+        !resMgr.LoadTexture("player_guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png")) {
+		cout << "플레이어 로드 실패!" << endl;
+        return false;
+    }
+
+	// 몬스터 로드
+    if (!resMgr.LoadTexture("skeleton_idle", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Idle.png") ||
+        !resMgr.LoadTexture("skeleton_attack1", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Attack1.png") ||
+        !resMgr.LoadTexture("skeleton_attack2", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Attack2.png") ||
+        !resMgr.LoadTexture("skeleton_death", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Death.png") ||
+        !resMgr.LoadTexture("skeleton_guard", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Shield.png") ||
+        !resMgr.LoadTexture("skeleton_hit", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Take Hit.png") ||
+        !resMgr.LoadTexture("skeleton_walk", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Walk.png")) {
+        cout << "몬스터 로드 실패!" << endl;
+        return false;
+    }
+
+    // 배경 타일맵 로드
+    if (!resMgr.LoadTexture("tilemap", "Assets/Tiny Swords/Terrain/Tileset/Tilemap_color1.png") ||
+        !resMgr.LoadTexture("shadow", "Assets/Tiny Swords/Terrain/Tileset/Shadow.png")) {
+		cout << "타일맵 로드 실패!" << endl;
+		return false;
+    }
+
+	return true;
+}
 
 // ==========================================
 // 1. 패킷 처리 콜백 함수들 (switch-case 완벽 대체)
@@ -43,17 +85,50 @@ void OnAvatarInfo(char* packet) {
 void OnAddObject(char* packet) {
 	auto p = reinterpret_cast<S2C_AddObject*>(packet);
 
+    if (GameManager::GetInstance().GetObject(p->object_id) != nullptr) return;
+
     // 타 유저나 NPC가 시야에 들어왔을 때 생성
     auto new_obj = std::make_unique<GameObject>();
 	new_obj->id = p->object_id;
 	new_obj->setPosition(p->x, p->y);
 	strcpy_s(new_obj->name, p->obj_name);
-    // (필요 시 이름표 출력 설정 등 추가)
+
+    // NPC
+    if (p->object_id >= 10'0000) {
+		new_obj->objectType = ObjectType::SKELETON;
+        new_obj->frameWidth = 150;
+		new_obj->frameHeight = 150;
+        new_obj->maxFrames = 4;
+
+		new_obj->scale = 1.7f;
+		new_obj->sprite.setScale(new_obj->scale, new_obj->scale);
+
+		new_obj->sprite.setOrigin(75.0f, 75.0f);
+		new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_idle"));
+    }
+    else {
+		new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_idle"));
+    }
+
+	new_obj->sprite.setTextureRect(sf::IntRect(0, 0, new_obj->frameWidth, new_obj->frameHeight));
+
+    // 2. 이름표(Text) 세팅
+    auto& resMgr = ResourceManager::GetInstance();
+    new_obj->nameText.setFont(resMgr.GetFont("main_font")); // 폰트 장착
+    new_obj->nameText.setString(new_obj->name);             // 글씨 설정
+    new_obj->nameText.setCharacterSize(18);                 // 글씨 크기
+    new_obj->nameText.setFillColor(sf::Color::White);       // 흰색 글씨
+    new_obj->nameText.setOutlineColor(sf::Color::Black);    // 검은 테두리
+    new_obj->nameText.setOutlineThickness(1.5f);            // 테두리 두께
+
+    // 글씨의 중심점을 중앙으로 맞춰서 머리 위에 예쁘게 뜨도록 설정
+    sf::FloatRect textRect = new_obj->nameText.getLocalBounds();
+    new_obj->nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
 
     GameManager::GetInstance().AddObject(p->object_id, std::move(new_obj));
 }
 
-void OnRemoeObject(char* packet) {
+void OnRemoveObject(char* packet) {
     auto p = reinterpret_cast<S2C_RemoveObject*>(packet);
     // 시야에서 벗어나거나 접속 종료 시 자동 삭제 및 메모리 해제
     GameManager::GetInstance().RemoveObject(p->object_id);
@@ -72,6 +147,7 @@ void OnAction(char* packet) {
         if (p->actionType == 1) obj->doAttack1();
 		else if (p->actionType == 2) obj->doAttack2();
         else if (p->actionType == 3) obj->doGuard();
+		else if (p->actionType == 4) obj->forceStopAction();
     }
 }
 
@@ -84,15 +160,13 @@ int main() {
     // ==========================================
     // [초기화 1] 리소스 로드
     // ==========================================
-	auto& resMgr = ResourceManager::GetInstance();
-    if (!resMgr.LoadTexture("idle", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Idle.png") ||
-        !resMgr.LoadTexture("run", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Run.png") ||
-        !resMgr.LoadTexture("attack1", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack1.png") ||
-        !resMgr.LoadTexture("attack2", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack2.png") ||
-        !resMgr.LoadTexture("guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png")) {
+    if (!LoadAllResources()) {
+        std::cout << "리소스 로드 실패! 경로를 확인하세요." << std::endl;
         system("pause");
         return -1;
-	}
+    }
+
+	MapManager::GetInstance().Initialize(WORLD_WIDTH, WORLD_HEIGHT);
 
     // ==========================================
     // [초기화 2] 네트워크 설정 및 콜백(핸들러) 등록
@@ -101,7 +175,7 @@ int main() {
 	netMgr.RegisterHandler(S2C_LOGIN_RESULT, OnLoginResult);
 	netMgr.RegisterHandler(S2C_AVATAR_INFO, OnAvatarInfo);
 	netMgr.RegisterHandler(S2C_ADD_OBJECT, OnAddObject);
-	netMgr.RegisterHandler(S2C_REMOVE_OBJECT, OnRemoeObject);
+	netMgr.RegisterHandler(S2C_REMOVE_OBJECT, OnRemoveObject);
 	netMgr.RegisterHandler(S2C_MOVE_OBJECT, OnMoveObject);
     netMgr.RegisterHandler(S2C_ACTION, OnAction);
 	
@@ -136,6 +210,8 @@ int main() {
     unsigned char comboStep = 0;
     sf::Clock comboResetTimer;
 
+    char lastDir = -1;
+
     // ==========================================
     // [메인 게임 루프]
     // ==========================================
@@ -143,87 +219,141 @@ int main() {
         sf::Event event;
         while (window.pollEvent(event)) {
             if (event.type == sf::Event::Closed) window.close();
-
-            // 단발성 키 입력 처리 (방어)
-            if (event.type == sf::Event::KeyPressed && event.key.code == sf::Keyboard::X && guardTimer.getElapsedTime().asSeconds() > 0.3f) {
-                C2S_Guard guardPacket = { sizeof(C2S_Guard), C2S_GUARD };
-                netMgr.SendPacket(&guardPacket);
-                guardTimer.restart();
-            }
         }
+
+        GameObject* myAvatar = gameMgr.GetMyAvatar();
 
         // 치다가 말았을 때 0.5초가 지나면 콤보 초기화 (다시 1타부터)
         if (comboStep > 0 && comboStep < 3 && comboResetTimer.getElapsedTime().asSeconds() > 0.5f) {
             comboStep = 0;
 		}
 
-        // C키를 꾹 누르고 있다면
-        if (sf::Keyboard::isKeyPressed(sf::Keyboard::C)) {
-            // 3연타를 마쳤다면 긴 쿨타임, 연타 중이라면 짧은 쿨타임
-            float requiredCooldown = (comboStep == 3) ? 1.0f : 0.3f;
+        if (window.hasFocus()) {
+            // C키를 꾹 누르고 있다면
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::C)) {
+                // 3연타를 마쳤다면 긴 쿨타임, 연타 중이라면 짧은 쿨타임
+                float requiredCooldown = (comboStep == 3) ? 0.7f : 0.3f;
 
-            if (attackTimer.getElapsedTime().asSeconds() >= requiredCooldown) {
-                C2S_Attack attackPacket;
-                memset(&attackPacket, 0, sizeof(attackPacket));
-				attackPacket.size = sizeof(attackPacket);
-				attackPacket.type = C2S_ATTACK;
+                if (attackTimer.getElapsedTime().asSeconds() >= requiredCooldown) {
+                    C2S_Attack attackPacket;
+                    memset(&attackPacket, 0, sizeof(attackPacket));
+                    attackPacket.size = sizeof(attackPacket);
+                    attackPacket.type = C2S_ATTACK;
 
-                if (comboStep == 0 || comboStep == 3) {
-                    attackPacket.attackType = 1; // 1타
-                    comboStep = 1;
-                }
-                else if (comboStep == 1) {
-                    attackPacket.attackType = 2; // 2타
-                    comboStep = 2;
-                }
-                else if (comboStep == 2) {
-                    attackPacket.attackType = 1;
-                    comboStep = 3;
+                    if (comboStep == 0 || comboStep == 3) {
+                        attackPacket.attackType = 1; // 1타
+                        comboStep = 1;
+                    }
+                    else if (comboStep == 1) {
+                        attackPacket.attackType = 2; // 2타
+                        comboStep = 2;
+                    }
+                    else if (comboStep == 2) {
+                        attackPacket.attackType = 1;
+                        comboStep = 3;
+                    }
+
+                    netMgr.SendPacket(&attackPacket);
+                    attackTimer.restart();
+                    comboResetTimer.restart();
                 }
 
-                netMgr.SendPacket(&attackPacket);
-                attackTimer.restart();
-                comboResetTimer.restart();
             }
 
-		}
+            if (sf::Keyboard::isKeyPressed(sf::Keyboard::X)) {
+                if (guardTimer.getElapsedTime().asSeconds() >= 0.1f) {
+                    C2S_Guard guardPacket;
+                    memset(&guardPacket, 0, sizeof(guardPacket));
+                    guardPacket.size = sizeof(guardPacket);
+                    guardPacket.type = C2S_GUARD;
+                    netMgr.SendPacket(&guardPacket);
+                    guardTimer.restart();
+                }
+            }
+            else {
+                if (myAvatar != nullptr && myAvatar->currentState == AnimState::GUARD) {
+                    myAvatar->forceStopAction();
+                    lastDir = -1;
 
-        // 연속 키 입력 처리 (이동)
-        if (moveTimer.getElapsedTime().asSeconds() >= 0.1f) {
-            int dir = -1;
-            if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) dir = 0;
-            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) dir = 1;
-            else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) dir = 2;
-			else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) dir = 3;
+                    C2S_StopAction stopPacket;
+                    stopPacket.size = sizeof(C2S_StopAction);
+                    stopPacket.type = C2S_STOP_ACTION;
+                    netMgr.SendPacket(&stopPacket);
+                }
+            }
 
-            if (dir != -1) {
-                C2S_Move movePacket;
-                
-				// 메모리 0으로 초기화 (안전한 패킷 전송을 위해 권장되는 관행)
-				memset(&movePacket, 0, sizeof(movePacket));
+            char currentDir = -1;
+            if (!sf::Keyboard::isKeyPressed(sf::Keyboard::C) && !sf::Keyboard::isKeyPressed(sf::Keyboard::X)) {
+                if (sf::Keyboard::isKeyPressed(sf::Keyboard::Up)) currentDir = 0;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Down)) currentDir = 1;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Left)) currentDir = 2;
+                else if (sf::Keyboard::isKeyPressed(sf::Keyboard::Right)) currentDir = 3;
+            }
 
-				movePacket.size = sizeof(movePacket);
-				movePacket.type = C2S_MOVE;
-                movePacket.direction = dir;
+            if (currentDir == -1) lastDir = -1;
 
-                netMgr.SendPacket(&movePacket);
-				moveTimer.restart();
+            bool isComboProgressing = (comboStep > 0 && comboResetTimer.getElapsedTime().asSeconds() <= 0.5f);
+
+            // 연속 키 입력 처리 (이동)
+            if (myAvatar != nullptr && !myAvatar->isActionPlaying && !isComboProgressing) {
+
+                // 핵심: "방향이 바뀌었거나(처음 누름 포함)" OR "0.1초가 지났을 때"만 발동!
+                if (currentDir != -1 && (currentDir != lastDir || moveTimer.getElapsedTime().asSeconds() >= 0.1f)) {
+
+                    C2S_Move movePacket;
+                    memset(&movePacket, 0, sizeof(movePacket));
+                    movePacket.size = sizeof(movePacket);
+                    movePacket.type = C2S_MOVE;
+                    movePacket.direction = currentDir;
+
+                    netMgr.SendPacket(&movePacket);
+
+                    moveTimer.restart(); // 시계 리셋
+                    lastDir = currentDir; // 마지막 방향 갱신
+                }
             }
         }
+        
 
         // 1. 네트워크 패킷 수신 및 자동 분배
         netMgr.Receive();
 
-        // 2. 카메라 추적 (내 아바타 중심)
-        GameObject* myAvatar = gameMgr.GetMyAvatar();
+        // 3. 렌더링
+        window.clear(sf::Color(78, 131, 151));      // 바다 색
+
+        // 게임 월드 그리기
         if (myAvatar) {
             camera.setCenter(myAvatar->sprite.getPosition());
             window.setView(camera);
-        }
+		}
 
-        // 3. 렌더링
-        window.clear(sf::Color(50, 50, 50));
+		MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
         gameMgr.UpdateAndDrawAll(window); // 애니메이션 갱신 및 화면 출력
+
+		window.setView(window.getDefaultView());
+
+        if (myAvatar) {
+            auto& resMgr = ResourceManager::GetInstance();
+
+            sf::Text coordText;
+			coordText.setFont(resMgr.GetFont("main_font"));
+
+            char buf[64];
+			sprintf_s(buf, "(%d, %d)", myAvatar->x, myAvatar->y);
+			coordText.setString(buf);
+
+            // 글씨 꾸미기
+            coordText.setCharacterSize(24);
+            coordText.setFillColor(sf::Color::White);           // 흰색 글씨
+            coordText.setOutlineColor(sf::Color::Black);        // 검은색 테두리 (배경이 밝아도 잘 보이게)
+            coordText.setOutlineThickness(2.0f);
+
+            // 위치 고정 (화면 왼쪽 위)
+            coordText.setPosition(15.f, 15.f);
+
+            window.draw(coordText);
+		}
+
         window.display();
     }
 	return 0;

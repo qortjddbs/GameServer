@@ -4,7 +4,7 @@ constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;
 constexpr int WORLD_HEIGHT = 2000;
 constexpr int MAX_PLAYERS = 10000;
-constexpr int NUM_NPCS = 200000;
+constexpr int NUM_NPCS = 3000;
 constexpr int NPC_ID_START = 1000000;
 constexpr int NPC_MOVE_INTERVAL = 1000; // in milliseconds
 constexpr int MAX_NAME_LEN = 20;
@@ -25,6 +25,7 @@ enum PACKET_TYPE {
 	C2S_LOGOUT,			// Client to Server: Logout request
 
 	C2S_GUARD,			// 방어 추가
+	C2S_STOP_ACTION, 	// 행동 중지 패킷 (방어 중지용)
 
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
 	// 로그인 결과 패킷 (성공 여부와 메시지 포함)
@@ -68,6 +69,12 @@ struct C2S_Attack {
 
 // 방어 패킷 추가
 struct C2S_Guard {
+	unsigned char size;
+	PACKET_TYPE   type;
+};
+
+// 방어 중지 패킷 추가
+struct C2S_StopAction {
 	unsigned char size;
 	PACKET_TYPE   type;
 };
