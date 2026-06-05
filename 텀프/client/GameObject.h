@@ -5,7 +5,7 @@
 #include "ResourceManager.h" // 텍스처를 가져오기 위해 포함
 
 // 애니메이션 상태 열거형
-enum class AnimState { IDLE, RUN, ATTACK };
+enum class AnimState { IDLE, RUN, ATTACK, HIT, DEATH };
 enum class ObjectType { PLAYER, SKELETON };
 
 class GameObject {
@@ -109,6 +109,32 @@ public:
         sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
     }
 
+    void doHit() {
+        currentState = AnimState::HIT;
+        isActionPlaying = true;
+        currentFrame = 0;
+        animClock.restart();
+
+        if (objectType == ObjectType::SKELETON) {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_hit"));
+            maxFrames = 4;
+        }
+        sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
+    }
+
+    void doDeath() {
+        currentState = AnimState::DEATH;
+        isActionPlaying = true;
+        currentFrame = 0;
+        animClock.restart();
+
+        if (objectType == ObjectType::SKELETON) {
+            sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_death"));
+            maxFrames = 4;
+        }
+        sprite.setTextureRect(sf::IntRect(0, 0, frameWidth, frameHeight));
+    }
+
     virtual void updateAnimation() {
         if (isWalking && walkTimer.getElapsedTime().asSeconds() > 0.55f) {
             isWalking = false;
@@ -117,31 +143,37 @@ public:
         // 1. 현재 상태에 맞춰 애니메이션 속도 세팅
         float animSpeed = 0.1f;
         if (currentState == AnimState::RUN) animSpeed = 0.05f;
-		else if (isActionPlaying) animSpeed = 0.06f;    // 공격/방어는 조금 더 빠르게
+		else if (isActionPlaying) animSpeed = 0.06f;    // 공격은 좀 더 빠르게
 
         // 2. 타이머 틱 (시간이 다 되면 프레임 1증가)
         if (animClock.getElapsedTime().asSeconds() > animSpeed) {
-            currentFrame++;
+            if (currentState == AnimState::DEATH && currentFrame == maxFrames - 1) {
+                currentFrame = maxFrames - 1; // 뼈다귀 상태로 얼음!
+            }
+            else currentFrame++;
 
             // 단발성 액션이 끝까지 재생되었을 때
             if (isActionPlaying && currentFrame >= maxFrames) {
-                isActionPlaying = false;
-                currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
-                currentFrame = 0;
-                switch (objectType) {
-                case ObjectType::PLAYER: {
-                    sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
-                    maxFrames = isWalking ? 6 : 8;
-                    break;
+                if (currentState == AnimState::DEATH) {
+                    currentFrame = maxFrames - 1; // 초과 방지
                 }
-                case ObjectType::SKELETON: {
-                    sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_run" : "skeleton_idle"));
-                    maxFrames = 4;
-                    break;
+                else {
+                    isActionPlaying = false;
+                    currentState = isWalking ? AnimState::RUN : AnimState::IDLE;
+                    currentFrame = 0;
+                    switch (objectType) {
+                    case ObjectType::PLAYER: {
+                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "player_run" : "player_idle"));
+                        maxFrames = isWalking ? 6 : 8;
+                        break;
+                    }
+                    case ObjectType::SKELETON: {
+                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_walk" : "skeleton_idle"));
+                        maxFrames = 4;
+                        break;
+                    }
+                    }
                 }
-                }
-            
-				
             } 
             // 일반 루프 애니메이션일 때는 처음으로 반복
             else if (!isActionPlaying && currentFrame >= maxFrames) {
@@ -170,6 +202,7 @@ public:
                         break;
 					}
                     case ObjectType::SKELETON: {
+                        sprite.setTexture(ResourceManager::GetInstance().GetTexture(isWalking ? "skeleton_walk" : "skeleton_idle"));
                         maxFrames = 4;
                         break;
 					}

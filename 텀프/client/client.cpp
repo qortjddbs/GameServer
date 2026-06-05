@@ -151,14 +151,16 @@ void OnAction(char* packet) {
     GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
     if (obj) {
         if (p->actionType == 1) {
-			obj->doAttack();
+            obj->doAttack();
 
-			auto& gameMgr = GameManager::GetInstance();
+            auto& gameMgr = GameManager::GetInstance();
             gameMgr.AddAttackEffect(obj->x, obj->y - 1);
             gameMgr.AddAttackEffect(obj->x, obj->y + 1);
             gameMgr.AddAttackEffect(obj->x - 1, obj->y);
             gameMgr.AddAttackEffect(obj->x + 1, obj->y);
         }
+        else if (p->actionType == 5) obj->doHit();
+        else if (p->actionType == 6) obj->doDeath();
     }
 }
 

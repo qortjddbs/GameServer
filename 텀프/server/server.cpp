@@ -30,7 +30,7 @@ struct Region {
 
 Region g_regions[MAX_REGION_X][MAX_REGION_Y];
 
-enum class EventType { EVENT_MOVE, EVENT_RESPAWN };
+enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN };
 
 struct TimerEvent 
 {
@@ -201,16 +201,22 @@ public:
 			sessions[real_index]->sessionIndex = real_index;
 			sessions[real_index]->id = npc_id;
 			sessions[real_index]->state.store(SessionState::INGAME);
-			sessions[real_index]->x = rand() % 200;
-			sessions[real_index]->y = rand() % 200;
-
+			sessions[real_index]->x = rand() % WORLD_WIDTH;
+			sessions[real_index]->y = rand() % WORLD_HEIGHT;
 			sprintf_s(sessions[real_index]->name, "Monster_%d", i + 1);
+
+			short rx = GetRegionX(sessions[real_index]->x);
+			short ry = GetRegionY(sessions[real_index]->y);
+			{
+				std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+				g_regions[rx][ry].objects.insert(npc_id);
+			}
 		}
 
 		// NPC 생성 후 1초~3초 뒤에 움직이라는 지시를 큐에 넣음
 		for (int i = 0; i < NUM_NPCS; ++i) {
 			int npc_id = NPC_ID_START + i;
-			AddTimerEvent(npc_id, EventType::EVENT_MOVE, rand() % 2000 + 1000);
+			AddTimerEvent(npc_id, EventType::EVENT_MOVE, 1'000);
 		}
 	}
 	bool Initialize() {
@@ -462,6 +468,8 @@ private:
 			std::lock_guard<std::mutex> vl(target->viewLock);
 			target->viewList.clear();
 		}
+
+		std::cout << "npc " << id << " is killed." << std::endl;
 	}
 
 	void TimerLoop() {
@@ -488,6 +496,9 @@ private:
 				} 
 				else if (top_event.type == EventType::EVENT_RESPAWN) {
 					ProcessNpcRespawn(top_event.object_id);	// 몬스터 리스폰
+				}
+				else if (top_event.type == EventType::EVENT_DESPAWN) {
+					KillObject(top_event.object_id);			// 몬스터 완전 제거
 				}
 				else {
 					// 아직 처리할 이벤트가 없으면 쓰레드 잠깐 재우기
@@ -519,7 +530,7 @@ private:
 			MoveObject(npc_id, nx, ny);
 		}
 
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 100000);	// 다음 이동 예약
 	}
 
 	void ProcessNpcRespawn(int npc_id) {
@@ -542,15 +553,25 @@ private:
 
 		auto near_objs = GetNearbyObjects(npc->x, npc->y);
 		for (int n_id : near_objs) {
-			if (IsPlayer(n_id)) {
-				Session* target = GetSession(n_id);
-				if (target && target->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, target->x, target->y)) {
-					// 리스폰한 NPC가 플레이어 시야에 있으면 추가 패킷 보내기
+			if (n_id == npc_id) continue;
+			Session* target = GetSession(n_id);
+			if (target && target->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, target->x, target->y)) {
+				// 서로의 viewList에 추가해야 상호작용 가능
+				{
+					std::lock_guard<std::mutex> vl(npc->viewLock);
+					npc->viewList.insert(n_id);
+				}
+				if (IsPlayer(n_id)) {
+					{
+						std::lock_guard<std::mutex> vl(target->viewLock);
+						target->viewList.insert(npc_id);
+					}
 					SendAddObject(n_id, npc_id);
 				}
 			}
+			
 		}
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 이동도 같이 예약
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 100000);	// 이동도 같이 예약
 		std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
 	}
 
@@ -709,8 +730,8 @@ private:
 		if (type == C2S_LOGIN) {
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
-			session->x = rand() % 200;
-			session->y = rand() % 200;
+			session->x = rand() % WORLD_WIDTH;
+			session->y = rand() % WORLD_HEIGHT;
 			session->state = SessionState::INGAME;
 
 			// 로그인 성공 및 아바타 정보 전송
@@ -793,15 +814,24 @@ private:
 							int dy = abs(session->y - npc->y);
 							if (dx + dy == 1) {
 								std::lock_guard<std::mutex> npcLock(npc->sessionLock);
-								npc->hp -= 35;	// 임시 데미지
+								npc->hp -= 50;	// 임시 데미지
 
 								if (npc->hp <= 0) {
 									npc->hp = 0;
-									exp_gained += (npc->level * npc->level * 2);	// 경험치 획득량 고정
-									KillObject(target_id);	// 몬스터 사망 처리
-									AddTimerEvent(target_id, EventType::EVENT_RESPAWN, 3'0000);	// 30초 뒤에 리스폰하도록 예약
+									npc->state.store(SessionState::DEAD);			// 시체 상태로 만들어 무적 판정
+									exp_gained += (npc->level * npc->level * 2);	// 경험치 획득량 고정 (요구사항)
+
+									S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, target_id, 6 };	// 공격당한 몬스터한테 죽었다는 액션 패킷 보내기
+									BroadcastToViewers(target_id, &deadPacket);
+
+									AddTimerEvent(target_id, EventType::EVENT_DESPAWN, 3000);	// 3초 뒤에 시체 제거
+									AddTimerEvent(target_id, EventType::EVENT_RESPAWN, 3'0000);	// 30초 뒤에 리스폰
 								}
 								else {
+									// 피격 모션 전송
+									S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, target_id, 5 };	// 공격당한 몬스터한테 피격 모션 패킷 보내기
+									BroadcastToViewers(target_id, &hitPacket);
+
 									S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, target_id, npc->hp, npc->max_hp, npc->exp, npc->level };
 									BroadcastToViewers(target_id, &statusPacket);
 								}
