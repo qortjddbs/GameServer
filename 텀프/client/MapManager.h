@@ -19,7 +19,7 @@ private:
     std::vector<std::vector<TileInfo>> m_map;
 
     sf::Sprite m_tileSprite;
-    sf::Sprite m_shadowSprite;
+    sf::Sprite m_rockSprite;
 
     MapManager() = default;
 

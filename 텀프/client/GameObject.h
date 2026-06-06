@@ -59,26 +59,33 @@ public:
             prev_y = new_y;
             sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
             isFirstSpawn = false;
-			return;
-        }
-
-        if (x != new_x || y != new_y) {
-            isWalking = true;
-            walkTimer.restart();
-
-            if (new_x < x) sprite.setScale(-scale, scale);
-            else if (new_x > x) sprite.setScale(scale, scale);
         }
         else {
-            isWalking = false;
+            if (x != new_x || y != new_y) {
+                isWalking = true;
+                walkTimer.restart();
+
+                if (new_x < x) sprite.setScale(-scale, scale);
+                else if (new_x > x) sprite.setScale(scale, scale);
+            }
+            else {
+                isWalking = false;
+            }
+
+            prev_x = x;
+            prev_y = y;
+            x = new_x;
+            y = new_y;
         }
-
-        prev_x = x;
-        prev_y = y;
-        x = new_x;
-        y = new_y;
-
         sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
+
+        char textBuf[128];
+		sprintf_s(textBuf, "(%d, %d)", x, y);
+        nameText.setString(textBuf);
+
+        sf::FloatRect textRect = nameText.getLocalBounds();
+		nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
+		nameText.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 - 25));
     }
 
     void setDirection(unsigned char dir) {
@@ -214,5 +221,6 @@ public:
 
     virtual void draw(sf::RenderWindow& window) {
         window.draw(sprite);
+        window.draw(nameText);
     }
 };

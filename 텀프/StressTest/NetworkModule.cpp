@@ -22,7 +22,6 @@ using namespace chrono;
 
 extern HWND		hWnd;
 
-// 🚨 목표 테스트 인원 설정 (5,000명)
 const static int MAX_TEST = 5000;
 const static int MAX_CLIENTS = MAX_TEST * 2;
 const static int INVALID_ID = -1;
@@ -130,7 +129,7 @@ void ProcessPacket(int ci, unsigned char packet[]) {
 				g_clients[my_id].x = move_packet->x;
 				g_clients[my_id].y = move_packet->y;
 			}
-			// 🚨 지연 시간(Lag) 측정
+			// 지연 시간(Lag) 측정
 			if (ci == my_id && move_packet->move_time != 0) {
 				auto d_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count() - move_packet->move_time;
 				if (global_delay < d_ms) global_delay++;

@@ -30,6 +30,27 @@ struct Region {
 
 Region g_regions[MAX_REGION_X][MAX_REGION_Y];
 
+// 서버용 장애물 맵 배열
+bool g_wall[WORLD_WIDTH][WORLD_HEIGHT] = { false };
+
+// 클라이언트와 똑같은 위치에 벽을 세우는 함수
+void InitServerMap() {
+	srand(2022180016);		// 클라이언트와 동일한 시드
+
+	for (int i = 0; i < 5'0000; ++i) {
+		int rx = rand() % (WORLD_WIDTH - 2);
+		int ry = rand() % (WORLD_HEIGHT - 2);
+
+		g_wall[rx][ry] = true;
+		g_wall[rx + 1][ry] = true;
+		g_wall[rx][ry + 1] = true;
+		g_wall[rx + 1][ry + 1] = true;
+	}
+
+	// 맵 생성 후 난수 초기화
+	srand(static_cast<unsigned int>(time(NULL)));
+}
+
 enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN };
 
 struct TimerEvent 
@@ -274,12 +295,14 @@ private:
 		ev.type = type;
 		ev.exec_time = std::chrono::system_clock::now() + std::chrono::milliseconds(delay_ms);
 
-		std::lock_guard<std::mutex> lock(timer_mock);
-		timer_queue.push(ev);
+		{
+			std::lock_guard<std::mutex> lock(timer_mock);
+			timer_queue.push(ev);
+		}
 	}
 
 	// 배열 인덱스 초과를 막는 라우터
-	Session* GetSession(int id) {
+	Session* GetSessionId(int id) {
 		if (id < MAX_PLAYERS) {
 			return sessions[id];		// 유저는 그대로
 		}
@@ -292,8 +315,8 @@ private:
 	bool IsPlayer(int id) { return id < MAX_PLAYERS; }
 
 	void SendAddObject(int to_id, int target_id) {
-		Session* to = GetSession(to_id);
-		Session* target = GetSession(target_id);
+		Session* to = GetSessionId(to_id);
+		Session* target = GetSessionId(target_id);
 		if (!to || !target || to->state.load() != SessionState::INGAME || target->state.load() != SessionState::INGAME) return;
 
 		S2C_AddObject packet;
@@ -313,7 +336,7 @@ private:
 	}
 
 	void SendRemoveObject(int to_id, int target_id) {
-		Session* to = GetSession(to_id);
+		Session* to = GetSessionId(to_id);
 		if (!to || to->state.load() != SessionState::INGAME) return;
 
 		S2C_RemoveObject packet;
@@ -323,8 +346,8 @@ private:
 		to->SendPacket(&packet);
 	}
 
-	void SendMoveObject(int to_id, int target_id, short nx, short ny) {
-		Session* to = GetSession(to_id);
+	void SendMoveObject(int to_id, int target_id, short nx, short ny, unsigned int move_time = 0) {
+		Session* to = GetSessionId(to_id);
 		if (!to || to->state.load() != SessionState::INGAME) return;
 
 		S2C_MoveObject packet;
@@ -333,12 +356,12 @@ private:
 		packet.object_id = target_id;
 		packet.x = nx;
 		packet.y = ny;
-		packet.move_time = 0;
+		packet.move_time = move_time;
 		to->SendPacket(&packet);
 	}
 
-	void MoveObject(int id, short nx, short ny) {
-		Session* obj = GetSession(id);
+	void MoveObject(int id, short nx, short ny, unsigned int move_time = 0) {
+		Session* obj = GetSessionId(id);
 		if (!obj || obj->state.load() != SessionState::INGAME) return;
 
 		short old_x = obj->x;
@@ -381,7 +404,7 @@ private:
 		auto near_objs = GetNearbyObjects(nx, ny);
 		for (int n_id : near_objs) {
 			if (n_id == id) continue;	// 자기 자신은 시야에서 제외
-			Session* target = GetSession(n_id);
+			Session* target = GetSessionId(n_id);
 			if (target && target->state.load() == SessionState::INGAME && IsInView(nx, ny, target->x, target->y)) {
 				new_view.insert(n_id);
 			}
@@ -394,7 +417,7 @@ private:
 				if (IsPlayer(n_id)) SendAddObject(n_id, id);	// 새로 보이는 객체가 유저면 그 유저한테 내 정보 보내기
 			}
 			else {		// 기존에도 있던 객체
-				if (IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny);	// 기존에 보이던 객체 위치만 업데이트
+				if (IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny, move_time);	// 기존에 보이던 객체 위치만 업데이트
 			}
 		}
 
@@ -410,30 +433,29 @@ private:
 			obj->viewList = new_view;
 		}
 
-		if (IsPlayer(id)) SendMoveObject(id, id, nx, ny);	// 내가 유저면 내 위치 업데이트 패킷도 보내기
+		if (IsPlayer(id)) SendMoveObject(id, id, nx, ny, move_time);	// 내가 유저면 내 위치 업데이트 패킷도 보내기
 	}
 
-	// 나를 보고 있는 모든 플레이어에게 패킷을 보내는 함수
+	// 뷰리스트 대신 물리적인 주변 공간을 싹 뒤져서 패킷 발송
 	void BroadcastToViewers(int my_id, void* packet) {
-		Session* me = GetSession(my_id);
+		Session* me = GetSessionId(my_id);
 		if (!me) return;
-		std::unordered_set<int> my_view;
-		{
-			std::lock_guard<std::mutex> vl(me->viewLock);
-			my_view = me->viewList;
-		}
 
-		for (int viewer : my_view) {
+		auto near_objs = GetNearbyObjects(me->x, me->y);
+		for (int viewer : near_objs) {
 			if (IsPlayer(viewer)) {
-				Session* vSession = GetSession(viewer);
-				if (vSession) vSession->SendPacket(packet);
+				Session* vSession = GetSessionId(viewer);
+				// 게임 중이고 시야 거리 안에 있다면 무조건 발송!
+				if (vSession && vSession->state.load() == SessionState::INGAME && IsInView(me->x, me->y, vSession->x, vSession->y)) {
+					vSession->SendPacket(packet);
+				}
 			}
 		}
 	}
 
-	// 객체(플레이어, 몬스터) 사망 시 호출되는 완전 삭제 함수
+	// 객체(플레이어, 몬스터) 사망 시에도 주변 공간을 뒤져서 삭제 패킷 발송
 	void KillObject(int id) {
-		Session* target = GetSession(id);
+		Session* target = GetSessionId(id);
 		if (!target) return;
 		target->state.store(SessionState::DEAD);
 
@@ -445,25 +467,24 @@ private:
 			g_regions[rx][ry].objects.erase(id);
 		}
 
-		// 몬스터를 보고 있던 플레이어들의 화면에서 몬스터 제거
-		std::unordered_set<int> my_view;
-		{
-			std::lock_guard<std::mutex> vl(target->viewLock);
-			my_view = target->viewList;
-		}
+		// 주변에 있는 플레이어들에게 삭제 패킷 쏘기
+		auto near_objs = GetNearbyObjects(target->x, target->y);
+		for (int viewer : near_objs) {
+			if (IsPlayer(viewer)) {
+				Session* vSession = GetSessionId(viewer);
+				if (vSession && vSession->state.load() == SessionState::INGAME && IsInView(target->x, target->y, vSession->x, vSession->y)) {
+					SendRemoveObject(viewer, id);
 
-		for (int viewer : my_view) {
-			if (IsPlayer(viewer)) SendRemoveObject(viewer, id);
-			
-			// 상대방의 뷰리스트에서도 나 제거
-			Session* vSession = GetSession(viewer);
-			if (vSession) {
-				std::lock_guard<std::mutex> vl(vSession->viewLock);
-				vSession->viewList.erase(id);
+					{
+					// 유저의 뷰리스트에서도 죽은 몬스터 제거
+					std::lock_guard<std::mutex> vl(vSession->viewLock);
+					vSession->viewList.erase(id);
+					}
+				}
 			}
 		}
 
-		// 죽은 객체 뷰리스트 비우기
+		// 내 뷰리스트 비우기
 		{
 			std::lock_guard<std::mutex> vl(target->viewLock);
 			target->viewList.clear();
@@ -510,7 +531,7 @@ private:
 
 	// NPC가 랜덤으로 움직이는 AI 로직
 	void ProcessNpcMove(int npc_id) {
-		Session* npc = GetSession(npc_id);
+		Session* npc = GetSessionId(npc_id);
 		if (!npc || npc->state.load() != SessionState::INGAME) return;
 
 		// 랜덤 방향 생성
@@ -524,17 +545,19 @@ private:
 
 		// 맵 밖으로 안 나가게 방어
 		if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
-			if (nx < npc->x) npc->direction = 2;
-			else if (nx > npc->x) npc->direction = 3;
-			
-			MoveObject(npc_id, nx, ny);
+			if (g_wall[nx][ny] == false) {
+				if (nx < npc->x) npc->direction = 2;
+				else if (nx > npc->x) npc->direction = 3;
+
+				MoveObject(npc_id, nx, ny);
+			}
 		}
 
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 100000);	// 다음 이동 예약
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약
 	}
 
 	void ProcessNpcRespawn(int npc_id) {
-		Session* npc = GetSession(npc_id);
+		Session* npc = GetSessionId(npc_id);
 		if (!npc) return;
 
 		std::lock_guard<std::mutex> lock(npc->sessionLock);
@@ -554,7 +577,7 @@ private:
 		auto near_objs = GetNearbyObjects(npc->x, npc->y);
 		for (int n_id : near_objs) {
 			if (n_id == npc_id) continue;
-			Session* target = GetSession(n_id);
+			Session* target = GetSessionId(n_id);
 			if (target && target->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, target->x, target->y)) {
 				// 서로의 viewList에 추가해야 상호작용 가능
 				{
@@ -571,7 +594,7 @@ private:
 			}
 			
 		}
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 100000);	// 이동도 같이 예약
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 이동도 같이 예약
 		std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
 	}
 
@@ -595,7 +618,7 @@ private:
 		int new_id;
 		// for문 검색 대신 번호표 바구니에서 ID를 즉시 뽑아옴 O(1)
 		if (player_id_pool.try_pop(new_id)) {
-			Session* new_session = GetSession(new_id);
+			Session* new_session = GetSessionId(new_id);
 			new_session->id = new_id;
 			new_session->socket = clientSocket;
 			new_session->state = SessionState::CONNECTED;
@@ -718,7 +741,7 @@ private:
 	}
 
 	void OnPacket(int sessionId, char* packet) {			// 온전한 패킷 1개가 완성되면 이 함수로 던져줌
-		Session* session = GetSession(sessionId);
+		Session* session = GetSessionId(sessionId);
 		if (not session) return;
 		
 		PACKET_TYPE type = reinterpret_cast<C2S_Login*>(packet)->type;
@@ -752,7 +775,7 @@ private:
 			auto near_objs = GetNearbyObjects(session->x, session->y);
 			for (int n_id : near_objs) {
 				if (n_id == sessionId) continue;
-				Session* target = GetSession(n_id);
+				Session* target = GetSessionId(n_id);
 				if (target && target->state.load() == SessionState::INGAME && IsInView(session->x, session->y, target->x, target->y)) {
 					std::lock_guard<std::mutex> vl(session->viewLock);
 					session->viewList.insert(n_id);
@@ -780,10 +803,12 @@ private:
 				 else if (movePacket->direction == 3) nx += 1;	// Right
 
 				if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
-					if (nx < session->x) session->direction = 2;
-					else if (nx > session->x) session->direction = 3;
-					
-					MoveObject(sessionId, nx, ny);
+					if (g_wall[nx][ny] == false) {		// 벽이 아닐 때만 이동 허가
+						if (nx < session->x) session->direction = 2;
+						else if (nx > session->x) session->direction = 3;
+
+						MoveObject(sessionId, nx, ny, movePacket->move_time);
+					}
 				}
 			}
 			// 공격 패킷 처리
@@ -807,7 +832,7 @@ private:
 
 				for (int target_id : my_view) {
 					if (!IsPlayer(target_id)) {		// 몬스터만 공격 가능
-						Session* npc = GetSession(target_id);
+						Session* npc = GetSessionId(target_id);
 						if (npc && npc->state.load() == SessionState::INGAME) {
 							// 4방향 판정 (맨해튼 거리 1)
 							int dx = abs(session->x - npc->x);
@@ -824,7 +849,7 @@ private:
 									S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, target_id, 6 };	// 공격당한 몬스터한테 죽었다는 액션 패킷 보내기
 									BroadcastToViewers(target_id, &deadPacket);
 
-									AddTimerEvent(target_id, EventType::EVENT_DESPAWN, 3000);	// 3초 뒤에 시체 제거
+									AddTimerEvent(target_id, EventType::EVENT_DESPAWN, 1000);	// 1초 뒤에 시체 제거
 									AddTimerEvent(target_id, EventType::EVENT_RESPAWN, 3'0000);	// 30초 뒤에 리스폰
 								}
 								else {
@@ -864,7 +889,7 @@ private:
 	}
 
 	void Disconnect(int id) {
-		Session* session = GetSession(id);
+		Session* session = GetSessionId(id);
 		if (session) {
 			// delete 하지 않고 상태만 비운 다음 번호표 반납
 			session->Reset();
@@ -875,6 +900,8 @@ private:
 
 int main()
 {
+	InitServerMap();
+
 	IocpServer server;
 	if (server.Initialize()) {
 		server.Start();

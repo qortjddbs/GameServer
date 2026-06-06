@@ -11,8 +11,8 @@
 
 using namespace std;
 
-constexpr int WINDOW_WIDTH = 1024;
-constexpr int WINDOW_HEIGHT = 768;
+constexpr int WINDOW_WIDTH = 1280;
+constexpr int WINDOW_HEIGHT = 1280;
 
 bool LoadAllResources() {
 	auto& resMgr = ResourceManager::GetInstance();
@@ -47,8 +47,9 @@ bool LoadAllResources() {
 
     // 배경 타일맵 로드
     if (!resMgr.LoadTexture("tilemap", "Assets/Tiny Swords/Terrain/Tileset/Tilemap_color1.png") ||
-        !resMgr.LoadTexture("shadow", "Assets/Tiny Swords/Terrain/Tileset/Shadow.png")) {
-		cout << "타일맵 로드 실패!" << endl;
+        !resMgr.LoadTexture("shadow", "Assets/Tiny Swords/Terrain/Tileset/Shadow.png") ||
+        !resMgr.LoadTexture("rock", "Assets/Tiny Swords/Terrain/Decorations/Rocks/Rock2.png")) {
+		cout << "맵 로드 실패!" << endl;
 		return false;
     }
 
@@ -83,6 +84,14 @@ void OnAvatarInfo(char* packet) {
     my_avatar->level = p->level;
     my_avatar->setPosition(p->x, p->y);
 
+	my_avatar->nameText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
+	my_avatar->nameText.setCharacterSize(30);
+	my_avatar->nameText.setFillColor(sf::Color::Yellow);
+	my_avatar->nameText.setOutlineColor(sf::Color::Black);
+	my_avatar->nameText.setOutlineThickness(1.5f);
+
+	my_avatar->setPosition(p->x, p->y);
+
     gameMgr.AddObject(p->playerId, std::move(my_avatar));
 	cout << "내 아바타 생성 완료! (ID: " << p->playerId << ")" << endl;
 }
@@ -95,9 +104,16 @@ void OnAddObject(char* packet) {
     // 타 유저나 NPC가 시야에 들어왔을 때 생성
     auto new_obj = std::make_unique<GameObject>();
 	new_obj->id = p->object_id;
-	new_obj->setPosition(p->x, p->y);
-	new_obj->setDirection(p->direction);
 	strcpy_s(new_obj->name, p->obj_name);
+
+    new_obj->nameText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
+    new_obj->nameText.setCharacterSize(30);
+    new_obj->nameText.setFillColor(sf::Color::White);
+    new_obj->nameText.setOutlineColor(sf::Color::Black);
+    new_obj->nameText.setOutlineThickness(1.5f);
+
+    new_obj->setPosition(p->x, p->y);
+    new_obj->setDirection(p->direction);
 
     // NPC
     if (p->object_id >= 10'0000) {
@@ -118,18 +134,18 @@ void OnAddObject(char* packet) {
 
 	new_obj->sprite.setTextureRect(sf::IntRect(0, 0, new_obj->frameWidth, new_obj->frameHeight));
 
-    // 2. 이름표(Text) 세팅
-    auto& resMgr = ResourceManager::GetInstance();
-    new_obj->nameText.setFont(resMgr.GetFont("main_font")); // 폰트 장착
-    new_obj->nameText.setString(new_obj->name);             // 글씨 설정
-    new_obj->nameText.setCharacterSize(18);                 // 글씨 크기
-    new_obj->nameText.setFillColor(sf::Color::White);       // 흰색 글씨
-    new_obj->nameText.setOutlineColor(sf::Color::Black);    // 검은 테두리
-    new_obj->nameText.setOutlineThickness(1.5f);            // 테두리 두께
+    //// 2. 이름표(Text) 세팅
+    //auto& resMgr = ResourceManager::GetInstance();
+    //new_obj->nameText.setFont(resMgr.GetFont("main_font")); // 폰트 장착
+    //new_obj->nameText.setString(new_obj->name);             // 글씨 설정
+    //new_obj->nameText.setCharacterSize(18);                 // 글씨 크기
+    //new_obj->nameText.setFillColor(sf::Color::White);       // 흰색 글씨
+    //new_obj->nameText.setOutlineColor(sf::Color::Black);    // 검은 테두리
+    //new_obj->nameText.setOutlineThickness(1.5f);            // 테두리 두께
 
-    // 글씨의 중심점을 중앙으로 맞춰서 머리 위에 예쁘게 뜨도록 설정
-    sf::FloatRect textRect = new_obj->nameText.getLocalBounds();
-    new_obj->nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
+    //// 글씨의 중심점을 중앙으로 맞춰서 머리 위에 예쁘게 뜨도록 설정
+    //sf::FloatRect textRect = new_obj->nameText.getLocalBounds();
+    //new_obj->nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
 
     GameManager::GetInstance().AddObject(p->object_id, std::move(new_obj));
 }
@@ -233,8 +249,7 @@ int main() {
     // ==========================================
     sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2026 Term Proejct Client");
     window.setFramerateLimit(60);
-	//sf::View camera(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
-    sf::View camera(sf::FloatRect(0, 0, 1920, 1440));
+	sf::View camera(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
 
 	auto& gameMgr = GameManager::GetInstance();
 

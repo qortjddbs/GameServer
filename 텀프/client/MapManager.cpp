@@ -9,7 +9,10 @@ void MapManager::Initialize(int width, int height) {
 
     // 타일 스프라이트에 텍스처 미리 연결
     m_tileSprite.setTexture(ResourceManager::GetInstance().GetTexture("tilemap"));
-    m_shadowSprite.setTexture(ResourceManager::GetInstance().GetTexture("shadow"));
+	m_rockSprite.setTexture(ResourceManager::GetInstance().GetTexture("rock"));
+
+	// 서버와 같은 맵을 생성하기 위해 시드 고정
+    srand(2022180016);
 
     for (int i = 0; i < 5'0000; ++i) {
         int rx = rand() % (m_width - 2);
@@ -20,6 +23,9 @@ void MapManager::Initialize(int width, int height) {
         m_map[ry + 1][rx] = { 5, 1, true };
         m_map[ry + 1][rx + 1] = { 5, 1, true };
     }
+
+    // 맵 생성이 끝나면 다른 랜덤 요소들을 위해 시드 초기화
+    srand(static_cast<unsigned int>(time(NULL)));
 }
 
 void MapManager::Draw(sf::RenderWindow& window, const sf::View& camera) {
@@ -31,30 +37,15 @@ void MapManager::Draw(sf::RenderWindow& window, const sf::View& camera) {
 	int endX = std::min(m_width - 1, static_cast<int>((center.x + size.x / 2.0f) / TILE_SIZE) + 2);
 	int endY = std::min(m_height - 1, static_cast<int>((center.y + size.y / 2.0f) / TILE_SIZE) + 2);
 
-    // 1. 평지(Flat Ground) 먼저 그리기
     for (int y = startY; y < endY; ++y) {
         for (int x = startX; x < endX; ++x) {
-            if (m_map[y][x].sheetX != -1 && !m_map[y][x].isElevated) {
-                // 시트에서 64x64만큼 잘라내기
-                m_tileSprite.setTextureRect(sf::IntRect(m_map[y][x].sheetX * TILE_SIZE, m_map[y][x].sheetY * TILE_SIZE, TILE_SIZE, TILE_SIZE));
-                m_tileSprite.setPosition(x * TILE_SIZE, y * TILE_SIZE);
-                window.draw(m_tileSprite);
-            }
-        }
-    }
+            m_tileSprite.setTextureRect(sf::IntRect(TILE_SIZE , TILE_SIZE, TILE_SIZE * 2, TILE_SIZE * 2));
+            m_tileSprite.setPosition(x * TILE_SIZE, y * TILE_SIZE);
+            window.draw(m_tileSprite);
 
-    // 2. 그림자(Shadow) 그리기 (언덕의 한 칸 아래에 그려야 함)
-    for (int y = startY; y < endY; ++y) {
-        for (int x = startX; x < endX; ++x) {
             if (m_map[y][x].isElevated) {
-                // 그림자 먼저 그리기
-                m_shadowSprite.setPosition(x * TILE_SIZE - 32, y * TILE_SIZE + 64 - 32);
-                window.draw(m_shadowSprite);
-
-                // 언덕 그리기
-                m_tileSprite.setTextureRect(sf::IntRect(m_map[y][x].sheetX * TILE_SIZE, m_map[y][x].sheetY * TILE_SIZE, TILE_SIZE, TILE_SIZE));
-                m_tileSprite.setPosition(x * TILE_SIZE, y * TILE_SIZE);
-                window.draw(m_tileSprite);
+                m_rockSprite.setPosition(x * TILE_SIZE, y * TILE_SIZE + 20);
+                window.draw(m_rockSprite);
             }
         }
     }
