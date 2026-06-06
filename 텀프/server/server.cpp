@@ -67,7 +67,7 @@ struct TimerEvent
 };
 
 // IO 작업을 관리할 확장 오버랩드 구조체
-enum class IO_OP { RECV, SEND, ACCEPT };
+enum class IO_OP { RECV, SEND, ACCEPT, DO_AI };
 struct IOContext
 {
 	WSAOVERLAPPED overlapped;
@@ -546,19 +546,14 @@ private:
 
 			// 꺼낸 이벤트가 있다면 처리
 			if (has_event) {
-				if (top_event.type == EventType::EVENT_MOVE) {
-					ProcessNpcMove(top_event.object_id);	// NPC AI 로직 실행
-				} 
-				else if (top_event.type == EventType::EVENT_RESPAWN) {
-					ProcessNpcRespawn(top_event.object_id);	// 몬스터 리스폰
-				}
-				else if (top_event.type == EventType::EVENT_DESPAWN) {
-					KillObject(top_event.object_id);			// 몬스터 완전 제거
-				}
-				else {
-					// 아직 처리할 이벤트가 없으면 쓰레드 잠깐 재우기
-					std::this_thread::sleep_for(std::chrono::milliseconds(10));
-				}
+				// 함수를 타이머 루프에서 직접 처리하지 않고 Worker 쓰레드들에게 떠넘기기
+				// 안그러면 동접 많아질 때 몬스터들 바보됨 (타이머 큐에서 처리하는 것보다 쌓이는 게 빨라서)
+				IOContext* aiCtx = new IOContext(IO_OP::DO_AI);
+				PostQueuedCompletionStatus(hIocp, static_cast<DWORD>(top_event.type), top_event.object_id, &aiCtx->overlapped);
+			}
+			else {
+				// 아직 처리할 이벤트가 없으면 쓰레드 잠깐 재우기
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
 			}
 		}
 	}
@@ -877,7 +872,7 @@ private:
 
 			// 클라이언트가 게임을 강제 종료하거나 랜선이 뽑히면 bytesTransferred가 0으로 오거나
 			// result가 FALSE로 오는데, 이 경우 해당 유저(completionKey)의 세션을 리셋(Disconnect) 해줌
-			if (!result || bytesTransferred == 0 && ioCtx->opType != IO_OP::ACCEPT) {
+			if (!result || (bytesTransferred == 0 && ioCtx->opType != IO_OP::ACCEPT && ioCtx->opType != IO_OP::DO_AI)) {
 				if (completionKey != 10000) {
 					Disconnect(static_cast<int>(completionKey));
 					// std::cout << "[Disconnect] Player " << completionKey << " left." << std::endl;
@@ -925,6 +920,17 @@ private:
 				break;
 			}
 			case IO_OP::SEND: {
+				delete ioCtx;
+				break;
+			}
+			case IO_OP::DO_AI: {
+				EventType type = static_cast<EventType>(bytesTransferred);
+				int obj_id = static_cast<int>(completionKey);
+
+				if (type == EventType::EVENT_MOVE) ProcessNpcMove(obj_id);
+				else if (type == EventType::EVENT_RESPAWN) ProcessNpcRespawn(obj_id);
+				else if (type == EventType::EVENT_DESPAWN) KillObject(obj_id);
+
 				delete ioCtx;
 				break;
 			}
