@@ -34,6 +34,7 @@ bool LoadAllResources() {
     }
 
 	// 몬스터 로드
+    // [해골]
     if (!resMgr.LoadTexture("skeleton_idle", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Idle.png") ||
         !resMgr.LoadTexture("skeleton_attack1", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Attack1.png") ||
         !resMgr.LoadTexture("skeleton_attack2", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Attack2.png") ||
@@ -41,7 +42,39 @@ bool LoadAllResources() {
         !resMgr.LoadTexture("skeleton_guard", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Shield.png") ||
         !resMgr.LoadTexture("skeleton_hit", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Take Hit.png") ||
         !resMgr.LoadTexture("skeleton_walk", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Walk.png")) {
-        cout << "몬스터 로드 실패!" << endl;
+        cout << "해골 로드 실패!" << endl;
+        return false;
+    }
+
+    // [고블린]
+    if (!resMgr.LoadTexture("goblin_idle", "Assets/Monsters Creatures Fantasy/Sprites/Goblin/Idle.png") ||
+        !resMgr.LoadTexture("goblin_attack1", "Assets/Monsters Creatures Fantasy/Sprites/Goblin/Attack1.png") ||
+        !resMgr.LoadTexture("goblin_attack2", "Assets/Monsters Creatures Fantasy/Sprites/Goblin/Attack2.png") ||
+        !resMgr.LoadTexture("goblin_death", "Assets/Monsters Creatures Fantasy/Sprites/Goblin/Death.png") ||
+        !resMgr.LoadTexture("goblin_hit", "Assets/Monsters Creatures Fantasy/Sprites/Goblin/Take Hit.png") ||
+        !resMgr.LoadTexture("goblin_walk", "Assets/Monsters Creatures Fantasy/Sprites/Goblin/Run.png")) {
+        cout << "고블린 로드 실패!" << endl;
+        return false;
+    }
+
+    // [박쥐]
+    if (!resMgr.LoadTexture("flying_eye_flight", "Assets/Monsters Creatures Fantasy/Sprites/Flying eye/Flight.png") ||
+        !resMgr.LoadTexture("flying_eye_attack1", "Assets/Monsters Creatures Fantasy/Sprites/Flying eye/Attack1.png") ||
+        !resMgr.LoadTexture("flying_eye_attack2", "Assets/Monsters Creatures Fantasy/Sprites/Flying eye/Attack2.png") ||
+        !resMgr.LoadTexture("flying_eye_death", "Assets/Monsters Creatures Fantasy/Sprites/Flying eye/Death.png") ||
+        !resMgr.LoadTexture("flying_eye_hit", "Assets/Monsters Creatures Fantasy/Sprites/Flying eye/Take Hit.png")) {
+        cout << "박쥐 로드 실패!" << endl;
+        return false;
+    }
+
+    // [버섯]
+    if (!resMgr.LoadTexture("mushroom_idle", "Assets/Monsters Creatures Fantasy/Sprites/mushroom/Idle.png") ||
+        !resMgr.LoadTexture("mushroom_attack1", "Assets/Monsters Creatures Fantasy/Sprites/mushroom/Attack1.png") ||
+        !resMgr.LoadTexture("mushroom_attack2", "Assets/Monsters Creatures Fantasy/Sprites/mushroom/Attack2.png") ||
+        !resMgr.LoadTexture("mushroom_death", "Assets/Monsters Creatures Fantasy/Sprites/mushroom/Death.png") ||
+        !resMgr.LoadTexture("mushroom_hit", "Assets/Monsters Creatures Fantasy/Sprites/mushroom/Take Hit.png") ||
+        !resMgr.LoadTexture("mushroom_walk", "Assets/Monsters Creatures Fantasy/Sprites/mushroom/Run.png")) {
+        cout << "버섯 로드 실패!" << endl;
         return false;
     }
 
@@ -111,41 +144,34 @@ void OnAddObject(char* packet) {
     new_obj->nameText.setFillColor(sf::Color::White);
     new_obj->nameText.setOutlineColor(sf::Color::Black);
     new_obj->nameText.setOutlineThickness(1.5f);
+    new_obj->maxFrames = 4;
+
+    // NPC
+    if (p->object_id >= 10'0000) {
+        if (strstr(new_obj->name, "Skeleton"))              new_obj->objectType = ObjectType::SKELETON;
+        else if (strstr(new_obj->name, "Goblin"))           new_obj->objectType = ObjectType::GOBLIN;
+        else if (strstr(new_obj->name, "Flying_eye"))       new_obj->objectType = ObjectType::FLYING_EYE;
+        else if (strstr(new_obj->name, "Mushroom"))         new_obj->objectType = ObjectType::MUSHROOM;
+
+        new_obj->frameWidth = 150;
+		new_obj->frameHeight = 150;
+		new_obj->scale = 1.5f;
+		new_obj->sprite.setScale(new_obj->scale, new_obj->scale);
+		new_obj->sprite.setOrigin(75.0f, 75.0f);
+
+        if (new_obj->objectType == ObjectType::SKELETON)            new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_idle"));
+        else if (new_obj->objectType == ObjectType::GOBLIN)         new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("goblin_idle"));
+        else if (new_obj->objectType == ObjectType::FLYING_EYE)     new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("flying_eye_flight"));
+        else if (new_obj->objectType == ObjectType::MUSHROOM)       new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("mushroom_idle"));
+    }
+    else {
+		new_obj->objectType = ObjectType::PLAYER;
+    }
 
     new_obj->setPosition(p->x, p->y);
     new_obj->setDirection(p->direction);
 
-    // NPC
-    if (p->object_id >= 10'0000) {
-		new_obj->objectType = ObjectType::SKELETON;
-        new_obj->frameWidth = 150;
-		new_obj->frameHeight = 150;
-        new_obj->maxFrames = 4;
-
-		new_obj->scale = 1.7f;
-		new_obj->sprite.setScale(new_obj->scale, new_obj->scale);
-
-		new_obj->sprite.setOrigin(75.0f, 75.0f);
-		new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_idle"));
-    }
-    else {
-		new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("player_idle"));
-    }
-
 	new_obj->sprite.setTextureRect(sf::IntRect(0, 0, new_obj->frameWidth, new_obj->frameHeight));
-
-    //// 2. 이름표(Text) 세팅
-    //auto& resMgr = ResourceManager::GetInstance();
-    //new_obj->nameText.setFont(resMgr.GetFont("main_font")); // 폰트 장착
-    //new_obj->nameText.setString(new_obj->name);             // 글씨 설정
-    //new_obj->nameText.setCharacterSize(18);                 // 글씨 크기
-    //new_obj->nameText.setFillColor(sf::Color::White);       // 흰색 글씨
-    //new_obj->nameText.setOutlineColor(sf::Color::Black);    // 검은 테두리
-    //new_obj->nameText.setOutlineThickness(1.5f);            // 테두리 두께
-
-    //// 글씨의 중심점을 중앙으로 맞춰서 머리 위에 예쁘게 뜨도록 설정
-    //sf::FloatRect textRect = new_obj->nameText.getLocalBounds();
-    //new_obj->nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
 
     GameManager::GetInstance().AddObject(p->object_id, std::move(new_obj));
 }
@@ -169,11 +195,23 @@ void OnAction(char* packet) {
         if (p->actionType == 1) {
             obj->doAttack();
 
-            auto& gameMgr = GameManager::GetInstance();
-            gameMgr.AddAttackEffect(obj->x, obj->y - 1);
-            gameMgr.AddAttackEffect(obj->x, obj->y + 1);
-            gameMgr.AddAttackEffect(obj->x - 1, obj->y);
-            gameMgr.AddAttackEffect(obj->x + 1, obj->y);
+            if (obj->objectType == ObjectType::PLAYER) {
+                auto& gameMgr = GameManager::GetInstance();
+                gameMgr.AddAttackEffect(obj->x, obj->y - 1);
+                gameMgr.AddAttackEffect(obj->x, obj->y + 1);
+                gameMgr.AddAttackEffect(obj->x - 1, obj->y);
+                gameMgr.AddAttackEffect(obj->x + 1, obj->y);
+            }
+            else {
+				GameObject* monsterAvatar = GameManager::GetInstance().GetMyAvatar();
+                if (monsterAvatar) {
+					int dist = abs(obj->x - monsterAvatar->x) + abs(obj->y - monsterAvatar->y);
+                    if (dist <= 2) {
+                        if (monsterAvatar->x < obj->x) obj->setDirection(2);
+						else if (monsterAvatar->x > obj->x) obj->setDirection(3);
+                    }
+                }
+            }
         }
         else if (p->actionType == 5) obj->doHit();
         else if (p->actionType == 6) obj->doDeath();

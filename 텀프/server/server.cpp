@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <shared_mutex>
 #include <unordered_set>
+#include <unordered_map>
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_queue.h>
 #include "protocol_2026.h"
@@ -85,6 +86,10 @@ struct IOContext
 // 세션 상태 관리 정의
 enum class SessionState { FREE, CONNECTED, INGAME, DEAD };
 
+// 몬스터 AI 설정
+enum class MonsterType { SKELETON, GOBLIN, FLYING_EYE, MUSHROOM };
+enum class AiType { FIXED_PEACE, ROAMING_AGGRO };
+
 // 개별 플레이어를 나타내는 세션 클래스
 class Session
 {
@@ -103,6 +108,12 @@ public:
 	unsigned long long exp = 0;
 	unsigned char level = 1;
 	char name[MAX_NAME_LEN]{};
+
+	// 몬스터용 변수들
+	short origin_x = 0, origin_y = 0;	// 몬스터는 리젠 위치가 고정되어 있으므로 원래 위치 저장
+	MonsterType monster_type = MonsterType::SKELETON;
+	AiType ai_type = AiType::FIXED_PEACE;
+	int target_id = -1;					// 현재 공격 중인 대상
 
 	std::unordered_set<int> viewList;	// 내 화면에 보이고 있는 객체들의 ID
 	std::mutex viewLock;				// 시야 목록 전용 자물쇠
@@ -224,7 +235,30 @@ public:
 			sessions[real_index]->state.store(SessionState::INGAME);
 			sessions[real_index]->x = rand() % WORLD_WIDTH;
 			sessions[real_index]->y = rand() % WORLD_HEIGHT;
-			sprintf_s(sessions[real_index]->name, "Monster_%d", i + 1);
+			
+			// 몬스터 타입 및 리젠 위치 기억
+			sessions[real_index]->monster_type = static_cast<MonsterType>(i % 4);
+			sessions[real_index]->origin_x = sessions[real_index]->x;
+			sessions[real_index]->origin_y = sessions[real_index]->y;
+
+			MonsterType m_type = sessions[real_index]->monster_type;
+
+			if (m_type == MonsterType::SKELETON) {
+				sprintf_s(sessions[real_index]->name, "Skeleton_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::FIXED_PEACE;
+			}
+			else if (m_type == MonsterType::GOBLIN) {
+				sprintf_s(sessions[real_index]->name, "Goblin_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
+			}
+			else if (m_type == MonsterType::FLYING_EYE) {
+				sprintf_s(sessions[real_index]->name, "Flying_eye_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
+			}
+			else if (m_type == MonsterType::MUSHROOM) {
+				sprintf_s(sessions[real_index]->name, "Mushroom_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::FIXED_PEACE;
+			}
 
 			short rx = GetRegionX(sessions[real_index]->x);
 			short ry = GetRegionY(sessions[real_index]->y);
@@ -529,31 +563,155 @@ private:
 		}
 	}
 
-	// NPC가 랜덤으로 움직이는 AI 로직
+	// 몬스터 타입에 따른 이동 패턴 구현 (A* 알고리즘 기반)
 	void ProcessNpcMove(int npc_id) {
 		Session* npc = GetSessionId(npc_id);
 		if (!npc || npc->state.load() != SessionState::INGAME) return;
 
-		// 랜덤 방향 생성
-		char dir = rand() % 4;
 		short nx = npc->x;
 		short ny = npc->y;
-		if (dir == 0) ny -= 1;		// Up
-		else if (dir == 1) ny += 1;	// Down
-		else if (dir == 2) nx -= 1;	// Left
-		else if (dir == 3) nx += 1;	// Right
+		bool hasAggroTarget = false;
+		short targetX = -1, targetY = -1;
 
-		// 맵 밖으로 안 나가게 방어
-		if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
-			if (g_wall[nx][ny] == false) {
-				if (nx < npc->x) npc->direction = 2;
-				else if (nx > npc->x) npc->direction = 3;
+		// 타겟 탐색
+		if (npc->ai_type == AiType::ROAMING_AGGRO) {
+			std::unordered_set<int> my_view;
+			{
+				std::lock_guard<std::mutex> vl(npc->viewLock);
+				my_view = npc->viewList;
+			}
 
-				MoveObject(npc_id, nx, ny);
+			int closestDist = 9999;
+			for (int obj_id : my_view) {
+				if (IsPlayer(obj_id)) {
+					Session* player = GetSessionId(obj_id);
+					if (player && player->state.load() == SessionState::INGAME) {
+						int dist = abs(npc->x - player->x) + abs(npc->y - player->y);
+						if (dist <= 5 && dist < closestDist) {
+							hasAggroTarget = true;
+							targetX = player->x;
+							targetY = player->y;
+							closestDist = dist;
+							npc->target_id = player->id;	// 끝까지 쫓아가기 위해 플레이어 기억
+						}
+					}
+				}
+			}
+		}
+		// 피스 몬스터: 평소엔 무시, 누가 나를 때리면 쫓아감
+		else if (npc->ai_type == AiType::FIXED_PEACE){
+			if (npc->target_id != -1) {		// 피스 몬스터를 누군가 때렸으면
+				Session* p = GetSessionId(npc->target_id);
+				if (p && p->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, p->x, p->y)) {
+					targetX = p->x;
+					targetY = p->y;
+					hasAggroTarget = true;
+				}
+				else {
+					npc->target_id = -1;		// 타겟이 시야에서 사라지면 원래대로 돌아가기
+				}
 			}
 		}
 
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약
+		// 이동 경로 결정
+		if (hasAggroTarget) {
+			// 타겟이 있으면 A*로 쫓아감 (전투 상태)
+			
+			// 타겟과의 거리 계산
+			int dist = abs(npc->x - targetX) + abs(npc->y - targetY);
+
+			// 몬스터 사거리 판단
+			int attack_range = 1;
+
+			if (dist <= attack_range) {
+				// 사거리 안으로 들어왔으면 공격
+				
+				// 위치는 제자리 고정
+				nx = npc->x;
+				ny = npc->y;
+
+				// 몬스터 공격
+				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, npc->id, 1 };
+				BroadcastToViewers(npc->id, &actionPacket);
+
+				// 플레이어 데미지 처리
+				Session* p = GetSessionId(npc->target_id);
+				if (p && p->state.load() == SessionState::INGAME) {
+					bool isDead = false;	// 데드락 방지용 플래그
+
+					{
+						std::lock_guard<std::mutex> pLock(p->sessionLock);
+						p->hp -= 20;
+						if (p->hp <= 0) {
+							p->hp = p->max_hp;
+							p->exp /= 2;
+							isDead = true;
+							npc->target_id = -1;
+						}
+					}
+						if (isDead) {
+							std::cout << "[Death] Player " << p->id << " died. Sent to town." << std::endl;
+							MoveObject(p->id, 0, 0);
+
+							S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, p->id, p->hp, p->max_hp, p->exp, p->level };
+							p->SendPacket(&statusPacket);
+							BroadcastToViewers(p->id, &statusPacket);
+						}
+						else {
+							// 안죽었으면 피격 패킷
+							S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, p->id, 5 };
+							BroadcastToViewers(p->id, &hitPacket);
+
+							S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, p->id, p->hp, p->max_hp, p->exp, p->level };
+							p->SendPacket(&statusPacket);
+							BroadcastToViewers(p->id, &statusPacket);
+						}
+				}
+			}
+			else {
+				// 몬스터 공격 사거리 밖이면 A*로 추적
+				short nextX, nextY;
+				if (FindNextStepAStar(npc->x, npc->y, targetX, targetY, nextX, nextY)) {
+					nx = nextX;
+					ny = nextY;
+				}
+			}
+		}
+		else {		// 타겟이 없으면
+			if (npc->ai_type == AiType::ROAMING_AGGRO) {
+				// 로밍 몬스터: 리젠 위치 기준으로 20x20 범위 내에서 무작위로 돌아다님
+				char dir = rand() % 4;
+				short temp_nx = nx, temp_ny = ny;
+				if (dir == 0) temp_ny -= 1;		
+				else if (dir == 1) temp_nx += 1;
+				else if (dir == 2) temp_ny += 1;
+				else if (dir == 3) temp_nx -= 1;
+
+				if (abs(temp_nx - npc->origin_x) <= 10 && abs(temp_ny - npc->origin_y) <= 10) {
+					nx = temp_nx;
+					ny = temp_ny;
+				}
+			}
+			else if(npc->ai_type == AiType::FIXED_PEACE) {
+				// 고정 몬스터: 타겟이 없으면 안움직임
+				nx = npc->x;
+				ny = npc->y;
+			}
+		}
+
+		// 벽 충돌 검사 및 최종 이동
+		if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
+			if (false == g_wall[nx][ny]) {
+				if (nx != npc->x || ny != npc->y) {
+					if (nx < npc->x) npc->direction = 2;
+					else if (nx > npc->x) npc->direction = 3;
+
+					MoveObject(npc_id, nx, ny);
+				}
+			}
+		}
+
+		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약 (0.5초마다 이동)
 	}
 
 	void ProcessNpcRespawn(int npc_id) {
@@ -625,6 +783,79 @@ private:
 			return new_id;
 		}
 		return -1;	// 빈 번호표 X -> 방 꽉참
+	}
+
+	// A* 길찾기용 노드 구조체
+	struct AStarNode {
+		short x, y;
+		int g, h, f;
+		bool operator>(const AStarNode& other) const { return f > other.f; }
+	};
+
+	// A* 알고리즘으로 타겟을 향한 다음 스텝(nx, ny)을 계산하는 함수
+	bool FindNextStepAStar(short startX, short startY, short targetX, short targetY, short& outX, short& outY) {
+		std::priority_queue<AStarNode, std::vector<AStarNode>, std::greater<AStarNode>> pq;
+
+		// 2000x2000 배열을 매번 만들면 서버가 터지므로, 탐색한 좌표만 해시맵에 저장 (키: y * 2000 + x)
+		std::unordered_map<int, std::pair<short, short>> cameFrom;
+		std::unordered_map<int, int> costSoFar;
+
+		int startKey = startY * WORLD_WIDTH + startX;
+		pq.push({ startX, startY, 0, abs(startX - targetX) + abs(startY - targetY), 0 });
+		cameFrom[startKey] = { startX, startY };
+		costSoFar[startKey] = 0;
+
+		short dx[] = { 0, 0, -1, 1 };
+		short dy[] = { -1, 1, 0, 0 };
+
+		bool found = false;
+		int iterations = 0;
+
+		while (!pq.empty()) {
+			if (iterations++ > 100) break;	// 서버 랙 방지: 어그로 반경(11x11)을 고려해 최대 100번만 탐색
+		
+			AStarNode current = pq.top();
+			pq.pop();
+
+			if (current.x == targetX && current.y == targetY) {
+				found = true;
+				break;
+			}
+
+			for (int i = 0; i < 4; ++i) {
+				short nx = current.x + dx[i];
+				short ny = current.y + dy[i];
+
+				// 맵 범위 이탈 및 장애물 검사
+				if (nx < 0 || nx >= WORLD_WIDTH || ny < 0 || ny >= WORLD_HEIGHT) continue;
+				if (g_wall[nx][ny]) continue;
+
+				int newCost = costSoFar[current.y * WORLD_WIDTH + current.x] + 1;
+				int nextKey = ny * WORLD_WIDTH + nx;
+
+				if (costSoFar.find(nextKey) == costSoFar.end() || newCost < costSoFar[nextKey]) {
+					costSoFar[nextKey] = newCost;
+					int heuristic = abs(nx - targetX) + abs(ny - targetY);
+					pq.push({ nx, ny, newCost, heuristic, newCost + heuristic });
+					cameFrom[nextKey] = { current.x, current.y };
+				}
+			}
+		}
+
+		if (!found) return false;	// 경로가 막혀있음
+
+		// 타겟에서 역추적하여 첫 번째 스텝 알아내기
+		short currX = targetX;
+		short currY = targetY;
+		while (cameFrom[currY * WORLD_WIDTH + currX].first != startX || cameFrom[currY * WORLD_WIDTH + currX].second != startY) {
+			auto prev = cameFrom[currY * WORLD_WIDTH + currX];
+			currX = prev.first;
+			currY = prev.second;
+		}
+
+		outX = currX;
+		outY = currY;
+		return true;
 	}
 
 	void WorkerLoop() {
@@ -841,9 +1072,15 @@ private:
 								std::lock_guard<std::mutex> npcLock(npc->sessionLock);
 								npc->hp -= 50;	// 임시 데미지
 
+								// 몬스터가 데미지 입고 살아남았고, 어그로가 아니었으면
+								if (npc->hp > 0 && npc->target_id == -1) {
+									npc->target_id = sessionId;
+								}
+
 								if (npc->hp <= 0) {
 									npc->hp = 0;
 									npc->state.store(SessionState::DEAD);			// 시체 상태로 만들어 무적 판정
+									
 									exp_gained += (npc->level * npc->level * 2);	// 경험치 획득량 고정 (요구사항)
 
 									S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, target_id, 6 };	// 공격당한 몬스터한테 죽었다는 액션 패킷 보내기
