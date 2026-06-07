@@ -110,10 +110,12 @@ public:
 	char name[MAX_NAME_LEN]{};
 
 	// 몬스터용 변수들
+	std::atomic<bool> is_active{ false };
 	short origin_x = 0, origin_y = 0;	// 몬스터는 리젠 위치가 고정되어 있으므로 원래 위치 저장
 	MonsterType monster_type = MonsterType::SKELETON;
 	AiType ai_type = AiType::FIXED_PEACE;
 	int target_id = -1;					// 현재 공격 중인 대상
+	std::atomic<int> viewers_count{ 0 };	// 나를 보고 있는 플레이어의 수 (Reference Count)
 
 	std::unordered_set<int> viewList;	// 내 화면에 보이고 있는 객체들의 ID
 	std::mutex viewLock;				// 시야 목록 전용 자물쇠
@@ -233,8 +235,8 @@ public:
 			sessions[real_index]->sessionIndex = real_index;
 			sessions[real_index]->id = npc_id;
 			sessions[real_index]->state.store(SessionState::INGAME);
-			sessions[real_index]->x = rand() % WORLD_WIDTH;
-			sessions[real_index]->y = rand() % WORLD_HEIGHT;
+			sessions[real_index]->x = (rand() % 1900) + 100;
+			sessions[real_index]->y = (rand() % 1900) + 100;
 			
 			// 몬스터 타입 및 리젠 위치 기억
 			sessions[real_index]->monster_type = static_cast<MonsterType>(i % 4);
@@ -268,11 +270,6 @@ public:
 			}
 		}
 
-		// NPC 생성 후 1초~3초 뒤에 움직이라는 지시를 큐에 넣음
-		for (int i = 0; i < NUM_NPCS; ++i) {
-			int npc_id = NPC_ID_START + i;
-			AddTimerEvent(npc_id, EventType::EVENT_MOVE, 1'000);
-		}
 	}
 	bool Initialize() {
 		// 윈도우 소켓 라이브러리 초기화 (Winsock 버전 2.2 사용하겠다는 뜻)
@@ -426,48 +423,72 @@ private:
 			}
 		}
 
-		// 기존 시야 복사
-		std::unordered_set<int> old_view;
-		{
-			std::lock_guard<std::mutex> vl(obj->viewLock);
-			old_view = obj->viewList;
-		}
-
-		// 새로운 시야 계산 (주변 9개 Region 검색)
-		std::unordered_set<int> new_view;
-		auto near_objs = GetNearbyObjects(nx, ny);
-		for (int n_id : near_objs) {
-			if (n_id == id) continue;	// 자기 자신은 시야에서 제외
-			Session* target = GetSessionId(n_id);
-			if (target && target->state.load() == SessionState::INGAME && IsInView(nx, ny, target->x, target->y)) {
-				new_view.insert(n_id);
+		if (IsPlayer(id)) {
+			// 플레이어가 이동한 경우에만 뷰리스트 갱신 및 시야 비교 수행
+			std::unordered_set<int> old_view;
+			{
+				std::lock_guard<std::mutex> vl(obj->viewLock);
+				old_view = obj->viewList;
 			}
-		}
 
-		// 차이점 비교 및 패킷 발송
-		for (int n_id : new_view) {
-			if (old_view.count(n_id) == 0) {		// 새로 발견
-				if (IsPlayer(id)) SendAddObject(id, n_id);	// 내가 유저면 새로 보이는 객체 정보 보내기
-				if (IsPlayer(n_id)) SendAddObject(n_id, id);	// 새로 보이는 객체가 유저면 그 유저한테 내 정보 보내기
+			std::unordered_set<int> new_view;
+			auto near_objs = GetNearbyObjects(nx, ny);
+			for (int n_id : near_objs) {
+				if (n_id == id) continue;
+				Session* target = GetSessionId(n_id);
+				if (target && target->state.load() == SessionState::INGAME && IsInView(nx, ny, target->x, target->y)) {
+					new_view.insert(n_id);
+				}
 			}
-			else {		// 기존에도 있던 객체
-				if (IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny, move_time);	// 기존에 보이던 객체 위치만 업데이트
+
+			for (int n_id : new_view) {
+				if (old_view.count(n_id) == 0) {		// 새로 발견
+					if (IsPlayer(n_id)) {
+						SendAddObject(id, n_id);
+						SendAddObject(n_id, id);
+					}
+					else {
+						SendAddObject(id, n_id);
+						Session* npc = GetSessionId(n_id);
+						// NPC를 내 시야에 넣으면서 Reference Count 증가 및 깨우기
+						if (npc && npc->viewers_count.fetch_add(1) == 0) {
+							WakeUpNpc(n_id);
+						}
+					}
+				}
+				else {		// 기존에도 있던 객체
+					if (IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny, move_time);	// 기존에 보이던 객체 위치만 업데이트
+				}
 			}
-		}
 
-		for (int o_id : old_view) {
-			if (new_view.count(o_id) == 0) {		// 시야에서 벗어남
-				if (IsPlayer(id)) SendRemoveObject(id, o_id);	// 내가 유저면 더이상 보이지 않는 객체 정보 삭제
-				if (IsPlayer(o_id)) SendRemoveObject(o_id, id);	// 더이상 보이지 않는 객체가 유저면 그 유저한테 내 정보 제거하라고 보내기
+			for (int o_id : old_view) {
+				if (new_view.count(o_id) == 0) {		// 시야에서 벗어남
+					SendRemoveObject(id, o_id);
+					if (IsPlayer(o_id)) {
+						SendRemoveObject(o_id, id);
+					}
+					else {
+						Session* npc = GetSessionId(o_id);
+						// NPC가 내 시야에서 벗어났으므로 Reference Count 감소 (0이 되면 알아서 잠듦)
+						if (npc) {
+							npc->viewers_count.fetch_sub(1);
+						}
+					}
+				}
 			}
-		}
 
-		{
-			std::lock_guard<std::mutex> vl(obj->viewLock);
-			obj->viewList = new_view;
-		}
+			{
+				std::lock_guard<std::mutex> vl(obj->viewLock);
+				obj->viewList = new_view;
+			}
 
-		if (IsPlayer(id)) SendMoveObject(id, id, nx, ny, move_time);	// 내가 유저면 내 위치 업데이트 패킷도 보내기
+			SendMoveObject(id, id, nx, ny, move_time);
+		}
+		else {
+			// NPC일 때는 시야 연산 없이 이동 패킷만 주변에 전송
+			S2C_MoveObject packet = { sizeof(S2C_MoveObject), S2C_MOVE_OBJECT, id, nx, ny, move_time };
+			BroadcastToViewers(id, &packet);
+		}
 	}
 
 	// 뷰리스트 대신 물리적인 주변 공간을 싹 뒤져서 패킷 발송
@@ -518,13 +539,24 @@ private:
 			}
 		}
 
-		// 내 뷰리스트 비우기
+		// 내 뷰리스트 비우기 & 카운트 다운
 		{
 			std::lock_guard<std::mutex> vl(target->viewLock);
+			if (IsPlayer(id)) {
+				for (int v_id : target->viewList) {
+					if (!IsPlayer(v_id)) {
+						Session* npc = GetSessionId(v_id);
+						if (npc) npc->viewers_count.fetch_sub(1);
+					}
+				}
+			}
+			else {
+				target->viewers_count.store(0);
+			}
 			target->viewList.clear();
 		}
 
-		std::cout << "npc " << id << " is killed." << std::endl;
+		std::cout << "object " << id << " is killed." << std::endl;
 	}
 
 	void TimerLoop() {
@@ -568,19 +600,27 @@ private:
 		bool hasAggroTarget = false;
 		short targetX = -1, targetY = -1;
 
-		// 타겟 탐색
-		if (npc->ai_type == AiType::ROAMING_AGGRO) {
-			std::unordered_set<int> my_view;
-			{
-				std::lock_guard<std::mutex> vl(npc->viewLock);
-				my_view = npc->viewList;
+		// 기존 타겟 추적 유지
+		if (npc->target_id != -1) {
+			Session* p = GetSessionId(npc->target_id);
+			if (p && p->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, p->x, p->y)) {
+				targetX = p->x;
+				targetY = p->y;
+				hasAggroTarget = true;
 			}
+			else {
+				npc->target_id = -1;		// 시야에서 사라지거나 죽었으면 타겟 초기화
+			}
+		}
 
+		// 타겟이 없다면 새 타겟 탐색
+		if (!hasAggroTarget && npc->ai_type == AiType::ROAMING_AGGRO) {
 			int closestDist = 9999;
-			for (int obj_id : my_view) {
+			auto near_objs = GetNearbyObjects(npc->x, npc->y);
+			for (int obj_id : near_objs) {
 				if (IsPlayer(obj_id)) {
 					Session* player = GetSessionId(obj_id);
-					if (player && player->state.load() == SessionState::INGAME) {
+					if (player && player->state.load() == SessionState::INGAME && IsInView(npc->x, npc->y, player->x, player->y)) {
 						int dist = abs(npc->x - player->x) + abs(npc->y - player->y);
 						if (dist <= 5 && dist < closestDist) {
 							hasAggroTarget = true;
@@ -629,39 +669,7 @@ private:
 				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, npc->id, 1 };
 				BroadcastToViewers(npc->id, &actionPacket);
 
-				// 플레이어 데미지 처리
-				Session* p = GetSessionId(npc->target_id);
-				if (p && p->state.load() == SessionState::INGAME) {
-					bool isDead = false;	// 데드락 방지용 플래그
-
-					{
-						std::lock_guard<std::mutex> pLock(p->sessionLock);
-						p->hp -= 20;
-						if (p->hp <= 0) {
-							p->hp = p->max_hp;
-							p->exp /= 2;
-							isDead = true;
-							npc->target_id = -1;
-						}
-					}
-						if (isDead) {
-							std::cout << "[Death] Player " << p->id << " died. Sent to town." << std::endl;
-							MoveObject(p->id, 0, 0);
-
-							S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, p->id, p->hp, p->max_hp, p->exp, p->level };
-							p->SendPacket(&statusPacket);
-							BroadcastToViewers(p->id, &statusPacket);
-						}
-						else {
-							// 안죽었으면 피격 패킷
-							S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, p->id, 5 };
-							BroadcastToViewers(p->id, &hitPacket);
-
-							S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, p->id, p->hp, p->max_hp, p->exp, p->level };
-							p->SendPacket(&statusPacket);
-							BroadcastToViewers(p->id, &statusPacket);
-						}
-				}
+				HandleDamage(npc_id, npc->target_id, 5);
 			}
 			else {
 				// 몬스터 공격 사거리 밖이면 A*로 추적
@@ -706,7 +714,15 @@ private:
 			}
 		}
 
-		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약 (0.5초마다 이동)
+		if (npc->viewers_count.load() > 0) {
+			AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약 (0.5초마다 이동)
+		}
+		else {
+			// 주변에 플레이어가 없으면 비활성화
+			npc->is_active.store(false);
+		}
+
+		
 	}
 
 	void ProcessNpcRespawn(int npc_id) {
@@ -715,8 +731,8 @@ private:
 
 		std::lock_guard<std::mutex> lock(npc->sessionLock);
 		npc->hp = npc->max_hp;
-		npc->x = rand() % WORLD_WIDTH;
-		npc->y = rand() % WORLD_HEIGHT;
+		npc->x = (rand() % 1900) + 100;
+		npc->y = (rand() % 1900) + 100;
 		npc->state.store(SessionState::INGAME);
 
 		// Region 재등록 및 뷰리스트 갱신
@@ -749,6 +765,94 @@ private:
 		}
 		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 이동도 같이 예약
 		std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
+	}
+
+	// 데미지 판정 함수
+	void HandleDamage(int attacker_id, int victim_id, int damage) {
+		Session* attacker = GetSessionId(attacker_id);
+		Session* victim = GetSessionId(victim_id);
+
+		if (!attacker || !victim || attacker->state.load() != SessionState::INGAME || victim->state.load() != SessionState::INGAME) return;
+	
+		bool is_victim_dead = false;
+		int exp_gained = 0;
+
+		// 데미지 적용 및 사망 판정
+		{
+			std::lock_guard<std::mutex> lock(victim->sessionLock);
+			victim->hp -= damage;
+
+			// 몬스터가 맞았고, 기존에 타겟이 없었다면 공격자를 타겟으로 설정
+			if (!IsPlayer(victim_id) && victim->hp > 0 && victim->target_id == -1) {
+				victim->target_id = attacker_id;
+			}
+
+			if (victim->hp <= 0) {
+				victim->hp = 0;
+				is_victim_dead = true;
+
+				if (IsPlayer(victim_id)) {
+					// 플레이어 사망 시 페널티
+					victim->hp = victim->max_hp;
+					victim->exp /= 2;
+					if (!IsPlayer(attacker_id)) attacker->target_id = -1;	// 공격한 몬스터의 타겟 해제
+				}
+				else {
+					// 몬스터 사망 시 시체 상태로 전환 및 경험치 계산
+					victim->state.store(SessionState::DEAD);
+					exp_gained = (victim->level * victim->level * 2);
+				}
+			}
+		}
+
+		// 사망 처리
+		if (is_victim_dead) {
+			if (IsPlayer(victim_id)) {
+				// 플레이어 부활 (일단 100,100 안으로)
+				std::cout << "[Death] Player " << victim->name << " died. Sent to town." << std::endl;
+				short respqwn_x = rand() % 100;
+				short respawn_y = rand() % 100;
+				MoveObject(victim_id, respqwn_x, respawn_y);
+
+				S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, victim_id, victim->hp, victim->max_hp, victim->exp, victim->level };
+				victim->SendPacket(&statusPacket);
+				BroadcastToViewers(victim_id, &statusPacket);
+			}
+			else {
+				// 몬스터 사망
+				S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, victim_id, 6 };
+				BroadcastToViewers(victim_id, &deadPacket);
+
+				AddTimerEvent(victim_id, EventType::EVENT_DESPAWN, 1000);
+				AddTimerEvent(victim_id, EventType::EVENT_RESPAWN, 30000);
+
+				// 플레이어 경험치 및 레벨업 처리
+				if (IsPlayer(attacker_id) && exp_gained > 0) {
+					std::lock_guard<std::mutex> myLock(attacker->sessionLock);
+					attacker->exp += exp_gained;
+
+					while (attacker->exp >= attacker->level * attacker->level * 100) {
+						attacker->exp -= attacker->level * attacker->level * 100;
+						attacker->level++;
+						attacker->max_hp += 50;
+						attacker->hp = attacker->max_hp;	// 레벨업 시 체력 전부 회복
+						std::cout << "Level Up! Player " << attacker->name << " is now level " << attacker->level << "!" << std::endl;
+					}
+
+					S2C_StatusChange myStatus = { sizeof(myStatus), S2C_STATUS_CHANGE, attacker_id, attacker->hp, attacker->max_hp, attacker->exp, attacker->level };
+					attacker->SendPacket(&myStatus);
+					BroadcastToViewers(attacker_id, &myStatus);
+				}
+			}
+		}
+		else {
+			S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, victim_id, 5 };
+			BroadcastToViewers(victim_id, &hitPacket);
+
+			S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, victim_id, victim->hp, victim->max_hp, victim->exp, victim->level };
+			if (IsPlayer(victim_id)) victim->SendPacket(&statusPacket);
+			BroadcastToViewers(victim_id, &statusPacket);
+		}
 	}
 
 	void RegisterAccept() {
@@ -851,6 +955,19 @@ private:
 		outX = currX;
 		outY = currY;
 		return true;
+	}
+
+	void WakeUpNpc(int npc_id) {
+		Session* npc = GetSessionId(npc_id);
+		if (!npc) return;
+
+		bool expected = false;
+		// CAS 연산 : is_active가 expected와 같다면 true로 바꾸고 true를 반환
+		// 이미 true라면 false를 반환하여 중복 타이머 등록 방지
+		if (npc->is_active.compare_exchange_strong(expected, true)) {
+			// 잠에서 깨어났으니 0.5초 뒤에 움직이도록 타이머에 등록
+			AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);
+		}
 	}
 
 	void WorkerLoop() {
@@ -1014,11 +1131,21 @@ private:
 				if (n_id == sessionId) continue;
 				Session* target = GetSessionId(n_id);
 				if (target && target->state.load() == SessionState::INGAME && IsInView(session->x, session->y, target->x, target->y)) {
-					std::lock_guard<std::mutex> vl(session->viewLock);
-					session->viewList.insert(n_id);
+					{
+						std::lock_guard<std::mutex> vl(session->viewLock);
+						session->viewList.insert(n_id);
 
+					}					
 					SendAddObject(sessionId, n_id);	// 나한테 새로 보이는 객체 정보 보내기
+
 					if (IsPlayer(n_id)) SendAddObject(n_id, sessionId);	// 새로 보이는 객체가 유저면 그 유저한테 내 정보 보내기
+					else {
+						// npc라면 나를 보는 사람 수 증가 & 깨우기 (0이었으면)
+						if (target->viewers_count.fetch_add(1) == 0) {
+							target->is_active.store(true);
+							AddTimerEvent(n_id, EventType::EVENT_MOVE, 500);
+						}
+					}
 				}
 			}
 
@@ -1075,34 +1202,7 @@ private:
 							int dx = abs(session->x - npc->x);
 							int dy = abs(session->y - npc->y);
 							if (dx + dy == 1) {
-								std::lock_guard<std::mutex> npcLock(npc->sessionLock);
-								npc->hp -= 50;	// 임시 데미지
-
-								// 몬스터가 데미지 입고 살아남았고, 어그로가 아니었으면
-								if (npc->hp > 0 && npc->target_id == -1) {
-									npc->target_id = sessionId;
-								}
-
-								if (npc->hp <= 0) {
-									npc->hp = 0;
-									npc->state.store(SessionState::DEAD);			// 시체 상태로 만들어 무적 판정
-									
-									exp_gained += (npc->level * npc->level * 2);	// 경험치 획득량 고정 (요구사항)
-
-									S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, target_id, 6 };	// 공격당한 몬스터한테 죽었다는 액션 패킷 보내기
-									BroadcastToViewers(target_id, &deadPacket);
-
-									AddTimerEvent(target_id, EventType::EVENT_DESPAWN, 1000);	// 1초 뒤에 시체 제거
-									AddTimerEvent(target_id, EventType::EVENT_RESPAWN, 3'0000);	// 30초 뒤에 리스폰
-								}
-								else {
-									// 피격 모션 전송
-									S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, target_id, 5 };	// 공격당한 몬스터한테 피격 모션 패킷 보내기
-									BroadcastToViewers(target_id, &hitPacket);
-
-									S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, target_id, npc->hp, npc->max_hp, npc->exp, npc->level };
-									BroadcastToViewers(target_id, &statusPacket);
-								}
+								HandleDamage(sessionId, target_id, 5);
 							}
 						}
 					}
@@ -1134,7 +1234,15 @@ private:
 	void Disconnect(int id) {
 		Session* session = GetSessionId(id);
 		if (session) {
-			// delete 하지 않고 상태만 비운 다음 번호표 반납
+			if (IsPlayer(id)) {
+				std::lock_guard<std::mutex> vl(session->viewLock);
+				for (int v_id : session->viewList) {
+					if (!IsPlayer(v_id)) {
+						Session* npc = GetSessionId(v_id);
+						if (npc) npc->viewers_count.fetch_sub(1);
+					}
+				}
+			}
 			session->Reset();
 			if (id < MAX_PLAYERS) player_id_pool.push(id);
 		}
