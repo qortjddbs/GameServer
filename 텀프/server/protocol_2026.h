@@ -56,12 +56,13 @@ struct C2S_Chat {
 	unsigned char size;
 	PACKET_TYPE   type;
 	char message[MAX_CHAT_MSG_LEN];
+	char chatType;
 };
 
 struct C2S_Attack {
 	unsigned char size;
 	PACKET_TYPE   type;
-	unsigned char attackType; // 1: Attack1, 2: Attack2
+	unsigned char attackType;
 };
 
 struct C2S_Teleport {
@@ -132,6 +133,7 @@ struct S2C_ChatMessage {
 	PACKET_TYPE   type;
 	int object_id;
 	char message[MAX_CHAT_MSG_LEN];
+	char chatType;
 };
 
 struct S2C_StatusChange {

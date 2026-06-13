@@ -20,6 +20,9 @@ public:
     sf::Sprite sprite;
     sf::Text nameText;
 
+    sf::String chatMsg;
+    sf::Clock chatTimer;
+
     // 애니메이션 관리를 위한 변수들
     sf::Clock animClock;
     sf::Clock walkTimer;
@@ -92,8 +95,8 @@ public:
         }
 
         char textBuf[128];
-		sprintf_s(textBuf, "%s\n(%d, %d)",typeStr.c_str(), x, y);
-        nameText.setString(textBuf);
+        sprintf_s(textBuf, "Lv.%d %s\n(%d, %d)", level, typeStr.c_str(), x, y);
+        nameText.setString(textBuf); // 혹시 모를 인코딩 대비 AnsiToWide
 
         sf::FloatRect textRect = nameText.getLocalBounds();
 		nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
@@ -332,5 +335,53 @@ public:
     virtual void draw(sf::RenderWindow& window) {
         window.draw(sprite);
         window.draw(nameText);
+
+        sf::Vector2f pos = sprite.getPosition();
+
+        if (max_hp > 0 && objectType != ObjectType::PLAYER) {
+            float hpRatio = (float)hp / max_hp;
+            if (hpRatio < 0) hpRatio = 0;
+
+            // 배경 (빈 피통이 눈에 확 띄도록 찐한 검정색 + 밝은 테두리)
+            sf::RectangleShape hpBg(sf::Vector2f(60.f, 8.f));
+            hpBg.setPosition(pos.x - 30.f, pos.y - 70.f);
+            hpBg.setFillColor(sf::Color(15, 15, 15, 255));
+            hpBg.setOutlineColor(sf::Color(150, 150, 150, 150)); // 테두리를 살짝 밝게
+            hpBg.setOutlineThickness(1.f);
+
+            // 남은 체력 채우기 (피가 0보다 클 때만 그려줌)
+            window.draw(hpBg);
+            if (hp >= 0) {
+                sf::RectangleShape hpFill(sf::Vector2f(60.f * hpRatio, 8.f));
+                hpFill.setPosition(pos.x - 30.f, pos.y - 70.f);
+                hpFill.setFillColor(sf::Color(220, 50, 50));
+                window.draw(hpFill);
+            }
+        }
+
+        if (chatMsg.getSize() > 0 && chatTimer.getElapsedTime().asSeconds() < 5.0f) {
+            sf::Text bubbleText;
+            bubbleText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
+            bubbleText.setCharacterSize(16);
+            bubbleText.setFillColor(sf::Color::White);
+            bubbleText.setOutlineColor(sf::Color::Black);
+            bubbleText.setOutlineThickness(1.5f);
+            bubbleText.setString(chatMsg);
+
+            // 글자 크기에 맞춰 검은색 반투명 말풍선 배경 생성
+            sf::FloatRect textBounds = bubbleText.getLocalBounds();
+            sf::RectangleShape bubble(sf::Vector2f(textBounds.width + 20.f, 28.f));
+            bubble.setFillColor(sf::Color(0, 0, 0, 180));
+            bubble.setOutlineColor(sf::Color(150, 150, 150, 200));
+            bubble.setOutlineThickness(1.5f);
+
+            // 위치 세팅 (머리 위 HP 바보다 조금 더 위에 배치)
+            sf::Vector2f pos = sprite.getPosition();
+            bubble.setPosition(pos.x - textBounds.width / 2.f - 10.f, pos.y - 110.f);
+            bubbleText.setPosition(pos.x - textBounds.width / 2.f, pos.y - 107.f);
+
+            window.draw(bubble);
+            window.draw(bubbleText);
+        }
     }
 };

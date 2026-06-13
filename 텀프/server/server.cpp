@@ -11,6 +11,7 @@
 #include <algorithm>
 #include <shared_mutex>
 #include <unordered_set>
+#include <random>
 #include <unordered_map>
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_queue.h>
@@ -52,7 +53,12 @@ void InitServerMap() {
 	srand(static_cast<unsigned int>(time(NULL)));
 }
 
-enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN };
+enum class SessionState { FREE, CONNECTED, INGAME, DEAD };
+enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN, EVENT_HP_RECOVERY };
+enum class MonsterType { SKELETON, GOBLIN, FLYING_EYE, MUSHROOM };
+enum class AiType { FIXED_PEACE, ROAMING_AGGRO };
+enum ActionType : char { ACTION_ATTACK = 1, ACTION_HIT = 5, ACTION_DEAD = 6 };
+enum class IO_OP { RECV, SEND, ACCEPT, DO_AI };
 
 struct TimerEvent 
 {
@@ -66,8 +72,6 @@ struct TimerEvent
 	}
 };
 
-// IO 작업을 관리할 확장 오버랩드 구조체
-enum class IO_OP { RECV, SEND, ACCEPT, DO_AI };
 struct IOContext
 {
 	WSAOVERLAPPED overlapped;
@@ -82,13 +86,6 @@ struct IOContext
 		wsabuf.len = sizeof(buffer);
 	}
 };
-
-// 세션 상태 관리 정의
-enum class SessionState { FREE, CONNECTED, INGAME, DEAD };
-
-// 몬스터 AI 설정
-enum class MonsterType { SKELETON, GOBLIN, FLYING_EYE, MUSHROOM };
-enum class AiType { FIXED_PEACE, ROAMING_AGGRO };
 
 // 개별 플레이어를 나타내는 세션 클래스
 class Session
@@ -105,9 +102,17 @@ public:
 	short x = 0, y = 0;
 	unsigned char direction = 3;	// 기본 방향 오른쪽
 	int hp = 100, max_hp = 100;
+	bool is_recovering = false;		// 풀피 아닐때만 회복
+	int attack_power = 50;
 	unsigned long long exp = 0;
 	unsigned char level = 1;
 	char name[MAX_NAME_LEN]{};
+
+	std::chrono::steady_clock::time_point last_move_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+	std::chrono::steady_clock::time_point last_attack_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+
+	// 피격 시 짧은 시간동안 무적
+	std::chrono::steady_clock::time_point last_hit_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 
 	// 몬스터용 변수들
 	std::atomic<bool> is_active{ false };
@@ -237,6 +242,7 @@ public:
 			sessions[real_index]->state.store(SessionState::INGAME);
 			sessions[real_index]->x = (rand() % 1900) + 100;
 			sessions[real_index]->y = (rand() % 1900) + 100;
+			sessions[real_index]->attack_power = 10;
 			
 			// 몬스터 타입 및 리젠 위치 기억
 			sessions[real_index]->monster_type = static_cast<MonsterType>(i % 4);
@@ -271,6 +277,7 @@ public:
 		}
 
 	}
+
 	bool Initialize() {
 		// 윈도우 소켓 라이브러리 초기화 (Winsock 버전 2.2 사용하겠다는 뜻)
 		WSADATA wsaData;
@@ -666,10 +673,10 @@ private:
 				ny = npc->y;
 
 				// 몬스터 공격
-				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, npc->id, 1 };
+				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, npc->id, ActionType::ACTION_ATTACK };
 				BroadcastToViewers(npc->id, &actionPacket);
 
-				HandleDamage(npc_id, npc->target_id, 5);
+				HandleDamage(npc_id, npc->target_id, npc->attack_power);
 			}
 			else {
 				// 몬스터 공격 사거리 밖이면 A*로 추적
@@ -774,8 +781,29 @@ private:
 
 		if (!attacker || !victim || attacker->state.load() != SessionState::INGAME || victim->state.load() != SessionState::INGAME) return;
 	
+		// 플레이어 피격 시 일정시간 무적
+		if (IsPlayer(victim_id)) {
+			auto now = std::chrono::steady_clock::now();
+
+			if (std::chrono::duration_cast<std::chrono::milliseconds>(now - victim->last_hit_time).count() < 1000) {
+				return;
+			}
+			victim->last_hit_time = now;
+		}
+
 		bool is_victim_dead = false;
 		int exp_gained = 0;
+
+		char sysMsg[256];
+		if (IsPlayer(attacker_id)) {
+			sprintf_s(sysMsg, "%s가 %s를 공격하여 %d의 데미지를 입혔습니다.", attacker->name, victim->name, damage);
+			SendSystemMessage(attacker_id, sysMsg);
+		}
+		else if (IsPlayer(victim_id)) {
+			sprintf_s(sysMsg, "%s의 공격으로 %d의 데미지를 입었습니다.", attacker->name, damage);
+			SendSystemMessage(victim_id, sysMsg);
+		}
+
 
 		// 데미지 적용 및 사망 판정
 		{
@@ -790,6 +818,7 @@ private:
 			if (victim->hp <= 0) {
 				victim->hp = 0;
 				is_victim_dead = true;
+				victim->is_recovering = false;
 
 				if (IsPlayer(victim_id)) {
 					// 플레이어 사망 시 페널티
@@ -801,6 +830,12 @@ private:
 					// 몬스터 사망 시 시체 상태로 전환 및 경험치 계산
 					victim->state.store(SessionState::DEAD);
 					exp_gained = (victim->level * victim->level * 2);
+				}
+			}
+			else {
+				if (victim->hp < victim->max_hp && !victim->is_recovering) {
+					victim->is_recovering = true;
+					AddTimerEvent(victim_id, EventType::EVENT_HP_RECOVERY, 5000);
 				}
 			}
 		}
@@ -820,8 +855,11 @@ private:
 			}
 			else {
 				// 몬스터 사망
-				S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, victim_id, 6 };
+				S2C_Action deadPacket = { sizeof(deadPacket), S2C_ACTION, victim_id, ActionType::ACTION_DEAD };
 				BroadcastToViewers(victim_id, &deadPacket);
+
+				S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, victim_id, victim->hp, victim->max_hp, victim->exp, victim->level };
+				BroadcastToViewers(victim_id, &statusPacket);
 
 				AddTimerEvent(victim_id, EventType::EVENT_DESPAWN, 1000);
 				AddTimerEvent(victim_id, EventType::EVENT_RESPAWN, 30000);
@@ -831,12 +869,16 @@ private:
 					std::lock_guard<std::mutex> myLock(attacker->sessionLock);
 					attacker->exp += exp_gained;
 
+					char killMsg[256];
+					sprintf_s(killMsg, "%s를 처치하여 %d의 경험치를 얻었습니다.", victim->name, exp_gained);
+					SendSystemMessage(attacker_id, killMsg);
+
 					while (attacker->exp >= attacker->level * attacker->level * 100) {
 						attacker->exp -= attacker->level * attacker->level * 100;
 						attacker->level++;
 						attacker->max_hp += 50;
+						attacker->attack_power += 50;
 						attacker->hp = attacker->max_hp;	// 레벨업 시 체력 전부 회복
-						std::cout << "Level Up! Player " << attacker->name << " is now level " << attacker->level << "!" << std::endl;
 					}
 
 					S2C_StatusChange myStatus = { sizeof(myStatus), S2C_STATUS_CHANGE, attacker_id, attacker->hp, attacker->max_hp, attacker->exp, attacker->level };
@@ -846,7 +888,7 @@ private:
 			}
 		}
 		else {
-			S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, victim_id, 5 };
+			S2C_Action hitPacket = { sizeof(hitPacket), S2C_ACTION, victim_id, ActionType::ACTION_HIT };
 			BroadcastToViewers(victim_id, &hitPacket);
 
 			S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, victim_id, victim->hp, victim->max_hp, victim->exp, victim->level };
@@ -970,6 +1012,57 @@ private:
 		}
 	}
 
+	// 06.13 HP 자동회복
+	void ProcessHpRecovery(int player_id) {
+		Session* player = GetSessionId(player_id);
+		if (!player || player->state.load() != SessionState::INGAME) return;
+
+		bool is_healed = false;
+		bool keep_recovering = false;
+
+		{
+			std::lock_guard<std::mutex> lock(player->sessionLock);
+			
+			if (player->is_recovering && player->hp > 0 && player->hp < player->max_hp) {
+				int recovery_amount = player->max_hp / 10;
+				player->hp += recovery_amount;
+				is_healed = true;
+
+				if (player->hp > player->max_hp) {
+					player->hp = player->max_hp;
+					player->is_recovering = false;
+				}
+				else {
+					keep_recovering = true;
+				}
+			}
+		}
+
+		if (is_healed) {
+			S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, player_id, player->hp, player->max_hp, player->exp, player->level };
+			player->SendPacket(&statusPacket);
+			BroadcastToViewers(player_id, &statusPacket);
+		}
+
+		if (keep_recovering) {
+			AddTimerEvent(player_id, EventType::EVENT_HP_RECOVERY, 5000);	// 다음 회복 예약
+		}
+	}
+
+	// 06.13 채팅
+	void SendSystemMessage(int player_id, const char* msg) {
+		Session* player = GetSessionId(player_id);
+		if (!player || player->state.load() != SessionState::INGAME) return;
+
+		S2C_ChatMessage chatPacket;
+		chatPacket.size = sizeof(S2C_ChatMessage);
+		chatPacket.type = S2C_CHAT_MESSAGE;
+		chatPacket.object_id = player_id;
+		strcpy_s(chatPacket.message, msg);
+
+		// player->SendPacket(&chatPacket);
+	}
+
 	void WorkerLoop() {
 		while (true) {
 			DWORD bytesTransferred = 0;
@@ -1047,6 +1140,7 @@ private:
 				if (type == EventType::EVENT_MOVE) ProcessNpcMove(obj_id);
 				else if (type == EventType::EVENT_RESPAWN) ProcessNpcRespawn(obj_id);
 				else if (type == EventType::EVENT_DESPAWN) KillObject(obj_id);
+				else if (type == EventType::EVENT_HP_RECOVERY) ProcessHpRecovery(obj_id);
 
 				delete ioCtx;
 				break;
@@ -1107,8 +1201,25 @@ private:
 		if (type == C2S_LOGIN) {
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
 			strcpy_s(session->name, loginPacket->username);
-			session->x = rand() % WORLD_WIDTH;
-			session->y = rand() % WORLD_HEIGHT;
+
+			// 멀티쓰레드 환경에서 안전한 랜덤 엔진 준비
+			thread_local std::random_device rd;
+			thread_local std::mt19937 gen(rd());
+
+			// (0, 맵의 최대 크기 - 1) 사이의 좌표를 뽑는 분포기
+			std::uniform_int_distribution<short> dist_x(0, WORLD_WIDTH - 1);
+			std::uniform_int_distribution<short> dist_y(0, WORLD_HEIGHT - 1);
+
+			short spawn_x, spawn_y;
+
+			// 장애물이 없는 안전한 좌표 찾을 때까지 뽑기
+			do {
+				spawn_x = dist_x(gen);
+				spawn_y = dist_y(gen);
+			} while (g_wall[spawn_x][spawn_y] == true);
+
+			session->x = spawn_x;
+			session->y = spawn_y;
 			session->state = SessionState::INGAME;
 
 			// 로그인 성공 및 아바타 정보 전송
@@ -1153,8 +1264,27 @@ private:
 		}
 		// 인게임 패킷 (이동, 공격)
 		else if (session->state.load() == SessionState::INGAME) {
+			auto now = std::chrono::steady_clock::now();
+
 			// 이동 패킷 처리
 			if (type == C2S_MOVE) {
+				auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - session->last_move_time).count();
+
+				// 1. 비정상적인 패킷 폭주 감지 (예: 0.5초가 정상인데 0.05초 만에 또 패킷이 옴)
+				// 네트워크 지연(핑 튀는 현상)을 고려하여 여유를 조금 둡니다 (예: 100ms 이하로 들어오면 비정상으로 간주)
+				if (duration < 100) {
+					std::cout << "[Warning] Player " << session->name << " is sending packets too fast! Disconnecting..." << std::endl;
+					Disconnect(sessionId); // 즉시 쫓아냄
+					return;
+				}
+
+				// 2. 정상적인 쿨타임 검증 (네트워크 지연 고려하여 400ms 정도로 너그럽게 허용할 수도 있습니다)
+				if (duration < 500) {
+					return; // 무시
+				}
+
+				session->last_move_time = now;
+
 				C2S_Move* movePacket = reinterpret_cast<C2S_Move*>(packet);
 
 				short nx = session->x;
@@ -1177,10 +1307,15 @@ private:
 			}
 			// 공격 패킷 처리
 			else if (type == C2S_ATTACK) {
+				if (std::chrono::duration_cast<std::chrono::milliseconds>(now - session->last_attack_time).count() < 1000) {
+					return;		// 공격 쿨타임 안 지났으면 무시
+				}
+				session->last_attack_time = now;	// 마지막 공격 시간 갱신
+
 				C2S_Attack* atk = reinterpret_cast<C2S_Attack*>(packet);
 
 				// 1. 공격 패킷 뷰리스트에 있는 객체들한테 보내기
-				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, sessionId, atk->attackType };
+				S2C_Action actionPacket = { sizeof(actionPacket), S2C_ACTION, sessionId, ActionType::ACTION_ATTACK };
 				BroadcastToViewers(sessionId, &actionPacket);
 				session->SendPacket(&actionPacket);	// 공격하는 본인한테도 패킷 보내기
 
@@ -1202,7 +1337,7 @@ private:
 							int dx = abs(session->x - npc->x);
 							int dy = abs(session->y - npc->y);
 							if (dx + dy == 1) {
-								HandleDamage(sessionId, target_id, 5);
+								HandleDamage(sessionId, target_id, session->attack_power);
 							}
 						}
 					}
@@ -1227,7 +1362,31 @@ private:
 					BroadcastToViewers(sessionId, &myStatus);
 				}
 				// session->SendPacket(&actionPacket);	// 공격하는 본인한테도 패킷 보내기
-			} 
+			}
+			else if (type == C2S_CHAT) {
+				C2S_Chat* chatPacket = reinterpret_cast<C2S_Chat*>(packet);
+
+				S2C_ChatMessage broadcastPacket;
+				broadcastPacket.size = sizeof(broadcastPacket);
+				broadcastPacket.type = S2C_CHAT_MESSAGE;
+				broadcastPacket.object_id = sessionId;
+				broadcastPacket.chatType = chatPacket->chatType;
+				sprintf_s(broadcastPacket.message, "[%s] %s", session->name, chatPacket->message);
+
+				if (chatPacket->chatType == 1) {
+					// [전체 채팅] 게임 중인 모든 플레이어에게 전송
+					for (int i = 0; i < MAX_PLAYERS; ++i) {
+						Session* pSession = sessions[i];
+						if (pSession && pSession->state.load() == SessionState::INGAME) {
+							pSession->SendPacket(&broadcastPacket);
+						}
+					}
+				}
+				else if (chatPacket->chatType == 0) {
+					BroadcastToViewers(sessionId, &broadcastPacket);
+					// session->SendPacket(&broadcastPacket);
+				}
+			}
 		}
 	}
 
