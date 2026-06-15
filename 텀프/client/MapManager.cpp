@@ -11,6 +11,9 @@ void MapManager::Initialize(int width, int height) {
     m_tileSprite.setTexture(ResourceManager::GetInstance().GetTexture("tilemap"));
 	m_rockSprite.setTexture(ResourceManager::GetInstance().GetTexture("rock"));
 
+    m_tileSprite.setColor(sf::Color(150, 50, 50)); // 다크 레드
+    m_rockSprite.setColor(sf::Color(200, 100, 100));
+
 	// 서버와 같은 맵을 생성하기 위해 시드 고정
     srand(2022180016);
 

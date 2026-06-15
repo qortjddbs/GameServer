@@ -19,6 +19,8 @@ using namespace std;
 constexpr int WINDOW_WIDTH = 1280;
 constexpr int WINDOW_HEIGHT = 1280;
 
+float g_screenShakeTime = 0.f; // 지진(컷신) 남은 시간
+
 struct ChatMessage {
     sf::String text;
     sf::Clock timer;
@@ -154,7 +156,7 @@ void OnAvatarInfo(char* packet) {
 	my_avatar->setPosition(p->x, p->y);
 
     gameMgr.AddObject(p->playerId, std::move(my_avatar));
-	cout << "내 아바타 생성 완료! (ID: " << p->playerId << ")" << endl;
+	// cout << "내 아바타 생성 완료! (ID: " << p->playerId << ")" << endl;
 }
 
 void OnAddObject(char* packet) {
@@ -261,13 +263,6 @@ void OnStatusChange(char* packet) {
 		obj->max_hp = p->max_hp;
 		obj->exp = p->exp;
 		obj->level = p->level;
-
-        // 내 캐릭터 정보가 갱신됐으면 콘솔에 출력
-        if (obj->id == GameManager::GetInstance().GetMyId()) {
-            cout << "내 상태 변경 - HP: " << obj->hp << "/" << obj->max_hp
-                 << ", EXP: " << obj->exp
-                 << ", Level: " << static_cast<int>(obj->level) << endl;
-		}
     }
 }
 
@@ -305,9 +300,6 @@ void OnChat(char* packet) {
     if (g_chatLog.size() > 10) g_chatLog.pop_front();
 }
 
-// ==========================================
-// 2. 메인 게임 함수
-// ==========================================
 int main() {
 	setlocale(LC_ALL, "korean");
     wcout.imbue(locale("korean"));
@@ -335,7 +327,15 @@ int main() {
     netMgr.RegisterHandler(S2C_ACTION, OnAction);
 	netMgr.RegisterHandler(S2C_STATUS_CHANGE, OnStatusChange);
 	netMgr.RegisterHandler(S2C_CHAT_MESSAGE, OnChat);
-	
+    netMgr.RegisterHandler(S2C_SKILL_EFFECT, [](char* packet) {
+        auto p = reinterpret_cast<S2C_SkillEffect*>(packet);
+        GameManager::GetInstance().AddSkillEffect(p->x, p->y, p->effect_type);
+
+        if (p->effect_type == 2) {
+            g_screenShakeTime = 2.0f;
+        }
+        });
+
     // ==========================================
 	// [초기화 3] 서버 접속 및 로그인
 	// ==========================================
@@ -480,13 +480,34 @@ int main() {
 
         // 게임 월드 그리기
         if (myAvatar) {
-            camera.setCenter(myAvatar->sprite.getPosition());
+            sf::Vector2f camPos = myAvatar->sprite.getPosition();
+
+            // -------------------------------------------------------------
+            // [추가] 지진(컷신) 효과 연산
+            // -------------------------------------------------------------
+            if (g_screenShakeTime > 0.f) {
+                camPos.x += (rand() % 20) - 10; // X축 무작위 흔들림
+                camPos.y += (rand() % 20) - 10; // Y축 무작위 흔들림
+                g_screenShakeTime -= 1.0f / 60.f;
+            }
+
+            camera.setCenter(camPos);
             window.setView(camera);
 		}
 
 		MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
-		gameMgr.DrawEffects(window);                        // 공격 이펙트 그리기
-        gameMgr.DrawAll(window);                            // 메인 화면용 아바타 그리기
+
+        sf::RectangleShape safeZone(sf::Vector2f(100.f * 64.f, 100.f * 64.f));
+        safeZone.setFillColor(sf::Color(50, 100, 255, 60)); // 반투명 파란색
+
+        safeZone.setPosition(0, 0); window.draw(safeZone);                       // 1구역
+        safeZone.setPosition(1900.f * 64.f, 0); window.draw(safeZone);           // 2구역
+        safeZone.setPosition(0, 1900.f * 64.f); window.draw(safeZone);           // 3구역
+        safeZone.setPosition(1900.f * 64.f, 1900.f * 64.f); window.draw(safeZone); // 4구역
+        // -------------------------------------------------------------
+
+        gameMgr.DrawEffects(window);
+        gameMgr.DrawAll(window);
 
 		window.setView(window.getDefaultView());
 
@@ -608,32 +629,68 @@ int main() {
             float minimapX = WINDOW_WIDTH - minimapSize - 20.f; // 오른쪽 여백 20
             float minimapY = 20.f;                              // 위쪽 여백 20
 
-            // 1. 미니맵 배경 (전체 월드를 의미함)
+            // 1. 미니맵 배경 그리기
             sf::RectangleShape minimapBg(sf::Vector2f(minimapSize, minimapSize));
             minimapBg.setPosition(minimapX, minimapY);
-            minimapBg.setFillColor(sf::Color(0, 0, 0, 150)); // 반투명 검은색 바탕
-            minimapBg.setOutlineColor(sf::Color(200, 200, 200)); // 옅은 회색 테두리
+            minimapBg.setFillColor(sf::Color(0, 0, 0, 180));
+            minimapBg.setOutlineColor(sf::Color(200, 200, 200));
             minimapBg.setOutlineThickness(2.f);
-
             window.draw(minimapBg);
 
-            // 2. 내 좌표를 백분율(비율)로 계산
-            // protocol_2026.h 에 정의된 WORLD_WIDTH, WORLD_HEIGHT를 사용합니다.
-            float playerRatioX = (float)myAvatar->x / WORLD_WIDTH;
-            float playerRatioY = (float)myAvatar->y / WORLD_HEIGHT;
+            auto drawZone = [&](float rx, float ry, float size, sf::Color color) {
+                sf::RectangleShape zone(sf::Vector2f(minimapSize * (size / 2000.f), minimapSize * (size / 2000.f)));
+                zone.setPosition(minimapX + (minimapSize * (rx / 2000.f)), minimapY + (minimapSize * (ry / 2000.f)));
+                zone.setFillColor(color);
+                window.draw(zone);
+                };
 
-            // 3. 내 위치를 나타내는 초록색 점(Dot) 생성
+            drawZone(0, 0, 100, sf::Color(50, 150, 255, 100));       // 1구역 초보
+            drawZone(1900, 0, 100, sf::Color(50, 150, 255, 100));    // 2구역 중급
+            drawZone(0, 1900, 100, sf::Color(50, 150, 255, 100));    // 3구역 상급
+            drawZone(1900, 1900, 100, sf::Color(50, 150, 255, 100)); // 4구역 최상급
+
+            // 보스 둥지 지역 상시 표시 (60, 60 근처, 반투명 붉은색)
+            drawZone(40, 40, 40, sf::Color(255, 0, 0, 100));
+
+            for (const auto& pair : gameMgr.GetObjects()) {
+                GameObject* obj = pair.second.get();
+                if (!obj || obj->id == gameMgr.GetMyId()) continue;
+
+                float ratioX = static_cast<float>(obj->x) / 2000.f;
+                float ratioY = static_cast<float>(obj->y) / 2000.f;
+
+                // 레이더에 포착된 보스 (새빨간 큰 점)
+                if (strncmp(obj->name, "Boss_", 5) == 0) {
+                    sf::CircleShape bossDot(6.f);
+                    bossDot.setOrigin(6.f, 6.f);
+                    bossDot.setPosition(minimapX + (minimapSize * ratioX), minimapY + (minimapSize * ratioY));
+                    bossDot.setFillColor(sf::Color::Red);
+                    bossDot.setOutlineColor(sf::Color::Black);
+                    bossDot.setOutlineThickness(1.f);
+                    window.draw(bossDot);
+                }
+                // 레이더에 포착된 다른 플레이어 (하얀 작은 점)
+                else if (obj->id < 5000) {
+                    sf::CircleShape otherDot(3.f);
+                    otherDot.setOrigin(3.f, 3.f);
+                    otherDot.setPosition(minimapX + (minimapSize * ratioX), minimapY + (minimapSize * ratioY));
+                    otherDot.setFillColor(sf::Color::White);
+                    otherDot.setOutlineColor(sf::Color::Black);
+                    otherDot.setOutlineThickness(0.5f);
+                    window.draw(otherDot);
+                }
+            }
+
+            // 3. 내 플레이어 위치 표시 (초록색 점)
+            float playerRatioX = static_cast<float>(myAvatar->x) / 2000.f;
+            float playerRatioY = static_cast<float>(myAvatar->y) / 2000.f;
+
             sf::CircleShape myDot(4.f);
-            myDot.setOrigin(4.f, 4.f); // 중심점을 동그라미 한가운데로 맞춤
-
-            // 미니맵 좌상단 위치 + (미니맵 전체 크기 * 내 좌표 비율)
-            myDot.setPosition(minimapX + (minimapSize * playerRatioX),
-                minimapY + (minimapSize * playerRatioY));
-
+            myDot.setOrigin(4.f, 4.f);
+            myDot.setPosition(minimapX + (minimapSize * playerRatioX), minimapY + (minimapSize * playerRatioY));
             myDot.setFillColor(sf::Color::Green);
             myDot.setOutlineColor(sf::Color::Black);
             myDot.setOutlineThickness(1.f);
-
             window.draw(myDot);
 
             // 3. 상태 텍스트 (바 위쪽에 깔끔하게 배치)
