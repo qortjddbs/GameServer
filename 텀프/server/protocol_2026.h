@@ -11,20 +11,20 @@ constexpr int MAX_CHAT_MSG_LEN = 200;
 
 enum PACKET_TYPE {
 	C2S_LOGIN,			// Client to Server: Login request
-	// 사용자 이름을 포함한 로그인 요청 패킷	
+		
 	C2S_MOVE,			// Client to Server: Move request
-	// 이동 방향과 이동 시간을 포함한 이동 요청 패킷
+	
 	C2S_CHAT,			// Client to Server: Chat message
-	// 채팅 메시지를 포함한 채팅 요청 패킷
+	
 	C2S_ATTACK,			// Client to Server: Attack request
-	// 공격 요청 패킷 (4 방향 동시 공격)
+	
 	C2S_TELEPORT,		// Client to Server: Teleport request
-	// 텔레포트 요청 패킷 (목적지 좌표 포함)
-	// STRESS TEST용으로 추가한 패킷입니다. 시작 마을에 몰리는 것을 방지.
+	
+
 	C2S_LOGOUT,			// Client to Server: Logout request
 
 	S2C_LOGIN_RESULT,	//	Server to Client: Login result
-	// 로그인 결과 패킷 (성공 여부와 메시지 포함)
+
 	S2C_AVATAR_INFO,	//	Server to Client: Avatar information
 	S2C_ADD_OBJECT,		//	Server to Client: Add player or NPC		
 	S2C_REMOVE_OBJECT,	//	Server to Client: Remove player or NPC
@@ -32,8 +32,8 @@ enum PACKET_TYPE {
 	S2C_CHAT_MESSAGE,	//	Server to Client: Chat message
 	S2C_STATUS_CHANGE,	//	Server to Client: Update player or NPC status (e.g., health, buffs)	
 
-	S2C_ACTION,			//	공격, 방어 등 단발성 애니메이션 전파용
-	S2C_SKILL_EFFECT,	//	보스 스킬 이펙트 전파용 (경고장판 + 폭발)
+	S2C_ACTION,		
+	S2C_SKILL_EFFECT,
 	S2C_ADD_ITEM,
 };
 
@@ -152,24 +152,24 @@ struct S2C_Action {
 	unsigned char size;
 	PACKET_TYPE type;
 	int object_id;
-	unsigned char actionType; // 1: Attack1, 2: Attack2, 3: Guard 등
+	unsigned char actionType;
 };
 
 struct S2C_SkillEffect {
 	unsigned char size;
 	PACKET_TYPE type;
-	int object_id;      // 누가 스킬을 썼는지
-	short x;            // 타겟 X 좌표
-	short y;            // 타겟 Y 좌표
-	unsigned char effect_type; // 0: 빨간색 경고 장판, 1: 실제 폭발 이펙트
+	int object_id;      
+	short x;            
+	short y;            
+	unsigned char effect_type;
 };
 
 struct S2C_AddItem {
 	unsigned char size;
 	PACKET_TYPE type;
-	int item_id;        // 아이템 종류 (예: 1: HP 포션, 2: 경험치 보상 등)
-	short x;            // 아이템 X 좌표
-	short y;            // 아이템 Y 좌표
+	int item_id;
+	short x;           
+	short y;           
 	unsigned char item_type;
 };
 
