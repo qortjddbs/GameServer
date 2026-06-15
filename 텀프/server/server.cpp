@@ -535,8 +535,8 @@ public:
 		chatPacket.size = sizeof(S2C_ChatMessage);
 		chatPacket.type = S2C_CHAT_MESSAGE;
 		chatPacket.object_id = boss_id;
-		chatPacket.chatType = 0;
-		sprintf_s(chatPacket.message, "[%s] %s", boss->name, msg);
+		chatPacket.chatType = 1;
+		sprintf_s(chatPacket.message, "[BOSS] 이 구역의 지배자는 나다!!");
 
 		// 시야에 없어도 멀리서 보스의 고함 소리가 들리도록 20칸 내 모든 유저에게 전송
 		auto near_objs = GetNearbyObjects(boss->x, boss->y);
