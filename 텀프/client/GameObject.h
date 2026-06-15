@@ -6,7 +6,7 @@
 
 // 애니메이션 상태 열거형
 enum class AnimState { IDLE, RUN, ATTACK, HIT, DEATH };
-enum class ObjectType { PLAYER, SKELETON, GOBLIN, FLYING_EYE, MUSHROOM };
+enum class ObjectType { PLAYER, SKELETON, GOBLIN, FLYING_EYE, MUSHROOM, POTION };
 
 class GameObject {
 public:
@@ -233,6 +233,8 @@ public:
     }
 
     virtual void updateAnimation() {
+        if (objectType == ObjectType::POTION) return;
+
         if (isWalking && walkTimer.getElapsedTime().asSeconds() > 0.55f) {
             isWalking = false;
 		}
@@ -349,6 +351,20 @@ public:
     }
 
     virtual void draw(sf::RenderWindow& window) {
+        if (objectType == ObjectType::POTION) {
+            sf::CircleShape potion(12.f); // 반지름 12짜리 원형 아이템
+            potion.setFillColor(sf::Color(255, 50, 50)); // 포션 빨간색
+            potion.setOutlineColor(sf::Color::White);
+            potion.setOutlineThickness(2.f);
+
+            // 바닥에 살짝 떠 있는 느낌을 주도록 위치 조정
+            potion.setOrigin(12.f, 12.f);
+            potion.setPosition(x * 64 + 32, y * 64 + 32 + 10.f);
+
+            window.draw(potion);
+            return; // 텍스처나 체력바를 그리지 않고 즉시 종료!
+        }
+
         float scale = 1.0f;
         float y_offset = 0.f;
 

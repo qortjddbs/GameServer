@@ -45,7 +45,7 @@ std::string WideToAnsi(const std::wstring& wideStr) {
 }
 
 bool LoadAllResources() {
-	auto& resMgr = ResourceManager::GetInstance();
+    auto& resMgr = ResourceManager::GetInstance();
 
     // 폰트 로드
     if (!resMgr.LoadFont("main_font", "malgun.ttf")) {
@@ -59,11 +59,11 @@ bool LoadAllResources() {
         !resMgr.LoadTexture("player_attack1", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack1.png") ||
         !resMgr.LoadTexture("player_attack2", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Attack2.png") ||
         !resMgr.LoadTexture("player_guard", "Assets/Tiny Swords/Units/Black Units/Warrior/Warrior_Guard.png")) {
-		cout << "플레이어 로드 실패!" << endl;
+        cout << "플레이어 로드 실패!" << endl;
         return false;
     }
 
-	// 몬스터 로드
+    // 몬스터 로드
     // [해골]
     if (!resMgr.LoadTexture("skeleton_idle", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Idle.png") ||
         !resMgr.LoadTexture("skeleton_attack1", "Assets/Monsters Creatures Fantasy/Sprites/Skeleton/Attack1.png") ||
@@ -112,25 +112,25 @@ bool LoadAllResources() {
     if (!resMgr.LoadTexture("tilemap", "Assets/Tiny Swords/Terrain/Tileset/Tilemap_color1.png") ||
         !resMgr.LoadTexture("shadow", "Assets/Tiny Swords/Terrain/Tileset/Shadow.png") ||
         !resMgr.LoadTexture("rock", "Assets/Tiny Swords/Terrain/Decorations/Rocks/Rock2.png")) {
-		cout << "맵 로드 실패!" << endl;
-		return false;
+        cout << "맵 로드 실패!" << endl;
+        return false;
     }
 
     if (!resMgr.LoadTexture("attack_effect", "Assets/Tiny Swords/Particle FX/Fire_02.png")) {
         cout << "공격 이펙트 로드 실패!" << endl;
-		return false;
+        return false;
     }
 
-	return true;
+    return true;
 }
 
 // ==========================================
 // 1. 패킷 처리 콜백 함수들 (switch-case 완벽 대체)
 // ==========================================
 void OnLoginResult(char* packet) {
-	auto p = reinterpret_cast<S2C_LoginResult*>(packet);
+    auto p = reinterpret_cast<S2C_LoginResult*>(packet);
     if (p->success) cout << "[서버] 로그인 성공: " << p->message << endl;
-	else cout << "[서버] 로그인 실패!" << endl;
+    else cout << "[서버] 로그인 실패!" << endl;
 }
 
 void OnAvatarInfo(char* packet) {
@@ -140,34 +140,34 @@ void OnAvatarInfo(char* packet) {
     gameMgr.SetMyId(p->playerId);
 
     auto my_avatar = std::make_unique<GameObject>();
-	my_avatar->id = p->playerId;
-	my_avatar->hp = p->hp;
-	my_avatar->max_hp = p->max_hp;
-	my_avatar->exp = p->exp;
+    my_avatar->id = p->playerId;
+    my_avatar->hp = p->hp;
+    my_avatar->max_hp = p->max_hp;
+    my_avatar->exp = p->exp;
     my_avatar->level = p->level;
     my_avatar->setPosition(p->x, p->y);
 
-	my_avatar->nameText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
-	my_avatar->nameText.setCharacterSize(30);
-	my_avatar->nameText.setFillColor(sf::Color::Yellow);
-	my_avatar->nameText.setOutlineColor(sf::Color::Black);
-	my_avatar->nameText.setOutlineThickness(1.5f);
+    my_avatar->nameText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
+    my_avatar->nameText.setCharacterSize(30);
+    my_avatar->nameText.setFillColor(sf::Color::Yellow);
+    my_avatar->nameText.setOutlineColor(sf::Color::Black);
+    my_avatar->nameText.setOutlineThickness(1.5f);
 
-	my_avatar->setPosition(p->x, p->y);
+    my_avatar->setPosition(p->x, p->y);
 
     gameMgr.AddObject(p->playerId, std::move(my_avatar));
-	// cout << "내 아바타 생성 완료! (ID: " << p->playerId << ")" << endl;
+    // cout << "내 아바타 생성 완료! (ID: " << p->playerId << ")" << endl;
 }
 
 void OnAddObject(char* packet) {
-	auto p = reinterpret_cast<S2C_AddObject*>(packet);
+    auto p = reinterpret_cast<S2C_AddObject*>(packet);
 
     if (GameManager::GetInstance().GetObject(p->object_id) != nullptr) return;
 
     // 타 유저나 NPC가 시야에 들어왔을 때 생성
     auto new_obj = std::make_unique<GameObject>();
-	new_obj->id = p->object_id;
-	strcpy_s(new_obj->name, p->obj_name);
+    new_obj->id = p->object_id;
+    strcpy_s(new_obj->name, p->obj_name);
 
     new_obj->hp = p->hp;
     new_obj->max_hp = p->max_hp;
@@ -189,10 +189,10 @@ void OnAddObject(char* packet) {
         else if (strstr(new_obj->name, "Mushroom"))         new_obj->objectType = ObjectType::MUSHROOM;
 
         new_obj->frameWidth = 150;
-		new_obj->frameHeight = 150;
-		new_obj->scale = 1.5f;
-		new_obj->sprite.setScale(new_obj->scale, new_obj->scale);
-		new_obj->sprite.setOrigin(75.0f, 75.0f);
+        new_obj->frameHeight = 150;
+        new_obj->scale = 1.5f;
+        new_obj->sprite.setScale(new_obj->scale, new_obj->scale);
+        new_obj->sprite.setOrigin(75.0f, 75.0f);
 
         if (new_obj->objectType == ObjectType::SKELETON)            new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("skeleton_idle"));
         else if (new_obj->objectType == ObjectType::GOBLIN)         new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("goblin_idle"));
@@ -200,13 +200,13 @@ void OnAddObject(char* packet) {
         else if (new_obj->objectType == ObjectType::MUSHROOM)       new_obj->sprite.setTexture(ResourceManager::GetInstance().GetTexture("mushroom_idle"));
     }
     else {
-		new_obj->objectType = ObjectType::PLAYER;
+        new_obj->objectType = ObjectType::PLAYER;
     }
 
     new_obj->setPosition(p->x, p->y);
     new_obj->setDirection(p->direction);
 
-	new_obj->sprite.setTextureRect(sf::IntRect(0, 0, new_obj->frameWidth, new_obj->frameHeight));
+    new_obj->sprite.setTextureRect(sf::IntRect(0, 0, new_obj->frameWidth, new_obj->frameHeight));
 
     GameManager::GetInstance().AddObject(p->object_id, std::move(new_obj));
 }
@@ -219,8 +219,8 @@ void OnRemoveObject(char* packet) {
 
 void OnMoveObject(char* packet) {
     auto p = reinterpret_cast<S2C_MoveObject*>(packet);
-	GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
-	if (obj) obj->setPosition(p->x, p->y);
+    GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
+    if (obj) obj->setPosition(p->x, p->y);
 }
 
 void OnAction(char* packet) {
@@ -238,12 +238,12 @@ void OnAction(char* packet) {
                 gameMgr.AddAttackEffect(obj->x + 1, obj->y);
             }
             else {
-				GameObject* monsterAvatar = GameManager::GetInstance().GetMyAvatar();
+                GameObject* monsterAvatar = GameManager::GetInstance().GetMyAvatar();
                 if (monsterAvatar) {
-					int dist = abs(obj->x - monsterAvatar->x) + abs(obj->y - monsterAvatar->y);
+                    int dist = abs(obj->x - monsterAvatar->x) + abs(obj->y - monsterAvatar->y);
                     if (dist <= 2) {
                         if (monsterAvatar->x < obj->x) obj->setDirection(2);
-						else if (monsterAvatar->x > obj->x) obj->setDirection(3);
+                        else if (monsterAvatar->x > obj->x) obj->setDirection(3);
                     }
                 }
             }
@@ -255,19 +255,19 @@ void OnAction(char* packet) {
 
 // 상태 변경을 처리하는 함수
 void OnStatusChange(char* packet) {
-	auto p = reinterpret_cast<S2C_StatusChange*>(packet);
-	GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
+    auto p = reinterpret_cast<S2C_StatusChange*>(packet);
+    GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
 
     if (obj) {
-		obj->hp = p->hp;
-		obj->max_hp = p->max_hp;
-		obj->exp = p->exp;
-		obj->level = p->level;
+        obj->hp = p->hp;
+        obj->max_hp = p->max_hp;
+        obj->exp = p->exp;
+        obj->level = p->level;
     }
 }
 
 void OnChat(char* packet) {
-	auto p = reinterpret_cast<S2C_ChatMessage*>(packet);
+    auto p = reinterpret_cast<S2C_ChatMessage*>(packet);
 
     time_t t = time(nullptr);
     struct tm tm_info;
@@ -282,11 +282,11 @@ void OnChat(char* packet) {
         GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
         if (obj) {
             obj->chatMsg = messageString;
-            obj->chatTimer.restart(); 
+            obj->chatTimer.restart();
         }
     }
-    
-    
+
+
     ChatMessage msg;
     sf::String prefix = L"";
     if (p->chatType == 1) prefix = L"[전체] ";
@@ -301,7 +301,7 @@ void OnChat(char* packet) {
 }
 
 int main() {
-	setlocale(LC_ALL, "korean");
+    setlocale(LC_ALL, "korean");
     wcout.imbue(locale("korean"));
 
     // ==========================================
@@ -313,20 +313,20 @@ int main() {
         return -1;
     }
 
-	MapManager::GetInstance().Initialize(WORLD_WIDTH, WORLD_HEIGHT);
+    MapManager::GetInstance().Initialize(WORLD_WIDTH, WORLD_HEIGHT);
 
     // ==========================================
     // [초기화 2] 네트워크 설정 및 콜백(핸들러) 등록
-	// ==========================================
+    // ==========================================
     auto& netMgr = NetworkManager::GetInstance();
-	netMgr.RegisterHandler(S2C_LOGIN_RESULT, OnLoginResult);
-	netMgr.RegisterHandler(S2C_AVATAR_INFO, OnAvatarInfo);
-	netMgr.RegisterHandler(S2C_ADD_OBJECT, OnAddObject);
-	netMgr.RegisterHandler(S2C_REMOVE_OBJECT, OnRemoveObject);
-	netMgr.RegisterHandler(S2C_MOVE_OBJECT, OnMoveObject);
+    netMgr.RegisterHandler(S2C_LOGIN_RESULT, OnLoginResult);
+    netMgr.RegisterHandler(S2C_AVATAR_INFO, OnAvatarInfo);
+    netMgr.RegisterHandler(S2C_ADD_OBJECT, OnAddObject);
+    netMgr.RegisterHandler(S2C_REMOVE_OBJECT, OnRemoveObject);
+    netMgr.RegisterHandler(S2C_MOVE_OBJECT, OnMoveObject);
     netMgr.RegisterHandler(S2C_ACTION, OnAction);
-	netMgr.RegisterHandler(S2C_STATUS_CHANGE, OnStatusChange);
-	netMgr.RegisterHandler(S2C_CHAT_MESSAGE, OnChat);
+    netMgr.RegisterHandler(S2C_STATUS_CHANGE, OnStatusChange);
+    netMgr.RegisterHandler(S2C_CHAT_MESSAGE, OnChat);
     netMgr.RegisterHandler(S2C_SKILL_EFFECT, [](char* packet) {
         auto p = reinterpret_cast<S2C_SkillEffect*>(packet);
         GameManager::GetInstance().AddSkillEffect(p->x, p->y, p->effect_type);
@@ -337,9 +337,12 @@ int main() {
         });
 
     // ==========================================
-	// [초기화 3] 서버 접속 및 로그인
-	// ==========================================
-    string server_ip = "127.0.0.1";
+    // [초기화 3] 서버 접속 및 로그인
+    // ==========================================   
+    string server_ip;
+    cout << "접속할 서버 IP를 입력하세요 : ";
+    cin >> server_ip;
+
     cout << "서버에 접속합니다 (" << server_ip << ")..." << endl;
 
     if (!netMgr.Connect(server_ip, PORT)) {
@@ -353,26 +356,26 @@ int main() {
     cin >> input_id;
 
     C2S_Login loginPacket;
-	loginPacket.size = sizeof(C2S_Login);
-	loginPacket.type = C2S_LOGIN;
-	strcpy_s(loginPacket.username, input_id.c_str());
+    loginPacket.size = sizeof(C2S_Login);
+    loginPacket.type = C2S_LOGIN;
+    strcpy_s(loginPacket.username, input_id.c_str());
     netMgr.SendPacket(&loginPacket);
 
-	// ==========================================
+    // ==========================================
     // [초기화 4] 윈도우 창 및 게임 객체 매니저 세팅
     // ==========================================
     sf::RenderWindow window(sf::VideoMode(WINDOW_WIDTH, WINDOW_HEIGHT), "2026 Term Proejct Client");
     window.setFramerateLimit(60);
-	sf::View camera(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
+    sf::View camera(sf::FloatRect(0, 0, WINDOW_WIDTH, WINDOW_HEIGHT));
 
     bool isChatting = false;
     bool isGlobalChat = false;
     sf::String currentChatInput;
 
-	auto& gameMgr = GameManager::GetInstance();
+    auto& gameMgr = GameManager::GetInstance();
 
     sf::Clock moveTimer;
-	sf::Clock attackTimer;
+    sf::Clock attackTimer;
 
     unsigned char comboStep = 0;
     sf::Clock comboResetTimer;
@@ -424,7 +427,7 @@ int main() {
             }
         }
 
-        
+
 
         GameObject* myAvatar = gameMgr.GetMyAvatar();
 
@@ -468,12 +471,12 @@ int main() {
             }
             else lastDir = -1;
         }
-        
+
 
         // 1. 네트워크 패킷 수신 및 자동 분배
         netMgr.Receive();
 
-		gameMgr.UpdateAll();
+        gameMgr.UpdateAll();
 
         // 3. 렌더링
         window.clear(sf::Color(78, 131, 151));      // 바다 색
@@ -493,9 +496,9 @@ int main() {
 
             camera.setCenter(camPos);
             window.setView(camera);
-		}
+        }
 
-		MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
+        MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
 
         sf::RectangleShape safeZone(sf::Vector2f(100.f * 64.f, 100.f * 64.f));
         safeZone.setFillColor(sf::Color(50, 100, 255, 60)); // 반투명 파란색
@@ -509,17 +512,17 @@ int main() {
         gameMgr.DrawEffects(window);
         gameMgr.DrawAll(window);
 
-		window.setView(window.getDefaultView());
+        window.setView(window.getDefaultView());
 
         if (myAvatar) {
             auto& resMgr = ResourceManager::GetInstance();
 
             sf::Text coordText;
-			coordText.setFont(resMgr.GetFont("main_font"));
+            coordText.setFont(resMgr.GetFont("main_font"));
 
             char buf[64];
-			sprintf_s(buf, "(%d, %d)", myAvatar->x, myAvatar->y);
-			coordText.setString(buf);
+            sprintf_s(buf, "(%d, %d)", myAvatar->x, myAvatar->y);
+            coordText.setString(buf);
 
             // 글씨 꾸미기
             coordText.setCharacterSize(24);
@@ -532,10 +535,10 @@ int main() {
 
             window.draw(coordText);
 
-			// 채팅 로그 출력
+            // 채팅 로그 출력
             sf::Text chatText;
-			chatText.setFont(resMgr.GetFont("main_font"));
-			chatText.setCharacterSize(18);
+            chatText.setFont(resMgr.GetFont("main_font"));
+            chatText.setCharacterSize(18);
             chatText.setOutlineThickness(1.0f);
 
             // 7초가 지난 메시지는 큐에서 완전히 삭제 (깜빡임/흐려짐 방지)
@@ -704,7 +707,7 @@ int main() {
             char uiBuf[256];
             // 소수점 1자리까지 퍼센트로 보여주면 더 좋습니다.
             sprintf_s(uiBuf, "Lv.%d %s | HP: %d / %d | EXP: %.1f%%",
-            myAvatar->level, myAvatar->name, myAvatar->hp, myAvatar->max_hp, expRatio * 100.0f);
+                myAvatar->level, myAvatar->name, myAvatar->hp, myAvatar->max_hp, expRatio * 100.0f);
 
             uiText.setString(AnsiToWide(uiBuf));
 
@@ -713,10 +716,10 @@ int main() {
             uiText.setPosition(WINDOW_WIDTH / 2.f - textRect.width / 2.f, 10.f);
 
             window.draw(uiText);
-		}
+        }
 
         window.display();
     }
-	return 0;
+    return 0;
 
 }

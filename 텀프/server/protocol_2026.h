@@ -34,6 +34,7 @@ enum PACKET_TYPE {
 
 	S2C_ACTION,			//	공격, 방어 등 단발성 애니메이션 전파용
 	S2C_SKILL_EFFECT,	//	보스 스킬 이펙트 전파용 (경고장판 + 폭발)
+	S2C_ADD_ITEM,
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -161,6 +162,15 @@ struct S2C_SkillEffect {
 	short x;            // 타겟 X 좌표
 	short y;            // 타겟 Y 좌표
 	unsigned char effect_type; // 0: 빨간색 경고 장판, 1: 실제 폭발 이펙트
+};
+
+struct S2C_AddItem {
+	unsigned char size;
+	PACKET_TYPE type;
+	int item_id;        // 아이템 종류 (예: 1: HP 포션, 2: 경험치 보상 등)
+	short x;            // 아이템 X 좌표
+	short y;            // 아이템 Y 좌표
+	unsigned char item_type;
 };
 
 #pragma pack(pop) // Restore default packing
