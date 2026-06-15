@@ -292,7 +292,7 @@ void OnChat(char* packet) {
 
     // 왼쪽 아래 글로벌 채팅 로그도 유지 (전체/주변 말머리 달아서 직관적으로)
     ChatMessage msg;
-    sf::String prefix = (p->chatType == 1) ? sf::String(L"[전체] ") : sf::String(L"[주변] ");
+    sf::String prefix = (p->chatType == 1) ? sf::String(L"[전체] ") : sf::String(L"[지역] ");
     msg.text = prefix + messageString + timeString;
     msg.timer.restart();
 

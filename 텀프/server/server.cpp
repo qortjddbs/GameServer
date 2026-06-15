@@ -144,21 +144,21 @@ public:
 		state.store(SessionState::FREE);
 	}
 
-	// void* -> 이 포인터가 가리키는 구조체가 뭔진 모르겠지만, 일단 메모리 주소만 넘긴다는 뜻
-	// void*를 안쓰면 패킷 종류만큼 오버로딩해서 생성해야됨.
 	void SendPacket(void* packet) {
-		// 들어온 void*를 unsigned char*로 변환하여 메모리의 맨 앞 1바이트 읽기
-		// -> 아 이 구조체가 뭔진 몰라도 크기가 xx바이트라고 파악
 		unsigned char* p = reinterpret_cast<unsigned char*>(packet);
 		IOContext* sendContext = new IOContext(IO_OP::SEND);
-		// OS송신 버퍼 (IOContext->buffer)에 정확히 xx바이트만 복사해 OS로 넘김
-		memcpy(sendContext->buffer, p, p[0]);		// void* memcpy(여기에, 이걸, 얼마만큼); 메모리 복사
+		memcpy(sendContext->buffer, p, p[0]);
 		sendContext->wsabuf.len = p[0];
 
 		DWORD sentBytes = 0;
-		WSASend(socket, &sendContext->wsabuf, 1, &sentBytes, 0, &sendContext->overlapped, nullptr);
-		// WSASend(누구한테 보낼건지, 보낼 데이터 버퍼, 버퍼 개수, 참조용 변수, 플래그 (보통 0), send가 완료되었을 때 완료 큐에 넣어줄 영수증, nullptr);
-		// 내가 지금 xx바이트짜리 버퍼 줄 테니까 백그라운드에서 전송해달라는 뜻 (비동기)
+		int ret = WSASend(socket, &sendContext->wsabuf, 1, &sentBytes, 0, &sendContext->overlapped, nullptr);
+
+		if (ret == SOCKET_ERROR) {
+			int err = WSAGetLastError();
+			if (err != WSA_IO_PENDING) {
+				delete sendContext;
+			}
+		}
 	}
 
 	// 크기 고정 배열의 고질적인 ID 재사용 문제 해결. (세션 번호와 접속 번호를 각각 부여)
@@ -563,7 +563,7 @@ private:
 			target->viewList.clear();
 		}
 
-		std::cout << "object " << id << " is killed." << std::endl;
+		// std::cout << "object " << id << " is killed." << std::endl;
 	}
 
 	void TimerLoop() {
@@ -738,8 +738,8 @@ private:
 
 		std::lock_guard<std::mutex> lock(npc->sessionLock);
 		npc->hp = npc->max_hp;
-		npc->x = (rand() % 1900) + 100;
-		npc->y = (rand() % 1900) + 100;
+		npc->x = (rand() % 1900) + 100;		// 100 ~ 2000
+		npc->y = (rand() % 1900) + 100;		// 100 ~ 2000
 		npc->state.store(SessionState::INGAME);
 
 		// Region 재등록 및 뷰리스트 갱신
@@ -771,7 +771,7 @@ private:
 			
 		}
 		AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 이동도 같이 예약
-		std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
+		//std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
 	}
 
 	// 데미지 판정 함수
@@ -844,8 +844,8 @@ private:
 		if (is_victim_dead) {
 			if (IsPlayer(victim_id)) {
 				// 플레이어 부활 (일단 100,100 안으로)
-				std::cout << "[Death] Player " << victim->name << " died. Sent to town." << std::endl;
-				short respqwn_x = rand() % 100;
+				//std::cout << "[Death] Player " << victim->name << " died. Sent to town." << std::endl;
+				short respqwn_x = rand() % 2000;
 				short respawn_y = rand() % 100;
 				MoveObject(victim_id, respqwn_x, respawn_y);
 
@@ -1273,8 +1273,8 @@ private:
 				// 1. 비정상적인 패킷 폭주 감지 (예: 0.5초가 정상인데 0.05초 만에 또 패킷이 옴)
 				// 네트워크 지연(핑 튀는 현상)을 고려하여 여유를 조금 둡니다 (예: 100ms 이하로 들어오면 비정상으로 간주)
 				if (duration < 100) {
-					std::cout << "[Warning] Player " << session->name << " is sending packets too fast! Disconnecting..." << std::endl;
-					Disconnect(sessionId); // 즉시 쫓아냄
+					// std::cout << "[Warning] Player " << session->name << " is sending packets too fast! Disconnecting..." << std::endl;
+					// Disconnect(sessionId); // 즉시 쫓아냄
 					return;
 				}
 
@@ -1353,7 +1353,7 @@ private:
 						session->level++;
 						session->max_hp += 50;				// 레벨업 보상 (최대체력 증가)
 						session->hp = session->max_hp;		// 레벨업하면 풀피
-						std::cout << "Level Up! Player " << session->name << " reached level " << session->level << "!" << std::endl;
+						// std::cout << "Level Up! Player " << session->name << " reached level " << session->level << "!" << std::endl;
 					}
 
 					// 내 상태 갱신
@@ -1393,6 +1393,10 @@ private:
 	void Disconnect(int id) {
 		Session* session = GetSessionId(id);
 		if (session) {
+			SessionState expected = session->state.load();
+			if (expected == SessionState::FREE || !session->state.compare_exchange_strong(expected, SessionState::FREE)) {
+				return; // 이미 다른 스레드가 Disconnect 처리를 완료했음
+			}
 			if (IsPlayer(id)) {
 				std::lock_guard<std::mutex> vl(session->viewLock);
 				for (int v_id : session->viewList) {
