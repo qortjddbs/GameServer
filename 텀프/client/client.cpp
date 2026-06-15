@@ -716,7 +716,7 @@ int main() {
             uiText.setOutlineColor(sf::Color::Black);
             uiText.setOutlineThickness(1.5f);
 
-            char uiBuf[256];
+            char uiBuf[256];  
             // 소수점 1자리까지 퍼센트로 보여주면 더 좋습니다.
             sprintf_s(uiBuf, "Lv.%d %s | HP: %d / %d | EXP: %.1f%%",
                 myAvatar->level, myAvatar->name, myAvatar->hp, myAvatar->max_hp, expRatio * 100.0f);
