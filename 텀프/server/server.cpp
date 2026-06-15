@@ -2100,6 +2100,33 @@ private:
 						else SendSystemMessage(sessionId, "무적 모드가 해제되었습니다.");
 						return;
 					}
+					else if (strncmp(chatPacket->message, "/level ", 7) == 0) {
+						int target_level;
+						if (sscanf_s(chatPacket->message + 7, "%d", &target_level) == 1) {
+							if (target_level > 0 && target_level <= 255) { // unsigned char 제한 방어
+								{
+									std::lock_guard<std::mutex> lock(session->sessionLock);
+									session->level = target_level;
+									session->exp = 0; // 레벨업 직후이므로 경험치 0 초기화
+
+									// 레벨에 따른 스탯 재계산 (기존 DB 로딩 규칙과 동일하게 맞춤)
+									session->max_hp = 100 + ((session->level - 1) * 50);
+									session->hp = session->max_hp; // 풀피 회복
+									session->attack_power = 50 + ((session->level - 1) * 50);
+								}
+
+								// 상태 갱신 패킷을 나와 주변에 뿌려서 UI 업데이트 및 렌더링 반영
+								S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, sessionId, session->hp, session->max_hp, session->exp, session->level };
+								session->SendPacket(&statusPacket);
+								BroadcastToViewers(sessionId, &statusPacket);
+
+								char msgBuf[128];
+								sprintf_s(msgBuf, "레벨이 %d(으)로 변경되었습니다. (공격력: %d / HP: %d)", session->level, session->attack_power, session->max_hp);
+								SendSystemMessage(sessionId, msgBuf);
+							}
+						}
+						return;
+					}
 				}
 
 				S2C_ChatMessage broadcastPacket;
