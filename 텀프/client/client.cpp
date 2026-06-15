@@ -283,16 +283,21 @@ void OnChat(char* packet) {
     sf::String timeString = sf::String(AnsiToWide(timeBuf));
     sf::String messageString = sf::String(AnsiToWide(p->message));
 
-    // [핵심] 해당 캐릭터(object_id)를 찾아서 말풍선 글씨를 덮어씌움 (새로 입력 시 즉각 반영)
-    GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
-    if (obj) {
-        obj->chatMsg = messageString;
-        obj->chatTimer.restart(); // 타이머 초기화 (다시 5초간 보여줌)
+    if (p->chatType != 2) {
+        GameObject* obj = GameManager::GetInstance().GetObject(p->object_id);
+        if (obj) {
+            obj->chatMsg = messageString;
+            obj->chatTimer.restart(); 
+        }
     }
-
-    // 왼쪽 아래 글로벌 채팅 로그도 유지 (전체/주변 말머리 달아서 직관적으로)
+    
+    
     ChatMessage msg;
-    sf::String prefix = (p->chatType == 1) ? sf::String(L"[전체] ") : sf::String(L"[지역] ");
+    sf::String prefix = L"";
+    if (p->chatType == 1) prefix = L"[전체] ";
+    else if (p->chatType == 0) prefix = L"[지역] ";
+    else prefix = L"[시스템] "; // chatType == 2
+
     msg.text = prefix + messageString + timeString;
     msg.timer.restart();
 
@@ -468,6 +473,8 @@ int main() {
         // 1. 네트워크 패킷 수신 및 자동 분배
         netMgr.Receive();
 
+		gameMgr.UpdateAll();
+
         // 3. 렌더링
         window.clear(sf::Color(78, 131, 151));      // 바다 색
 
@@ -479,7 +486,7 @@ int main() {
 
 		MapManager::GetInstance().Draw(window, camera);     // 맵 타일 그리기
 		gameMgr.DrawEffects(window);                        // 공격 이펙트 그리기
-        gameMgr.UpdateAndDrawAll(window);                   // 애니메이션 갱신 및 화면 출력
+        gameMgr.DrawAll(window);                            // 메인 화면용 아바타 그리기
 
 		window.setView(window.getDefaultView());
 
@@ -595,6 +602,39 @@ int main() {
             window.draw(hpFill);
             window.draw(expBg);
             window.draw(expFill);
+
+            // 미니맵 그리기
+            float minimapSize = 200.f;
+            float minimapX = WINDOW_WIDTH - minimapSize - 20.f; // 오른쪽 여백 20
+            float minimapY = 20.f;                              // 위쪽 여백 20
+
+            // 1. 미니맵 배경 (전체 월드를 의미함)
+            sf::RectangleShape minimapBg(sf::Vector2f(minimapSize, minimapSize));
+            minimapBg.setPosition(minimapX, minimapY);
+            minimapBg.setFillColor(sf::Color(0, 0, 0, 150)); // 반투명 검은색 바탕
+            minimapBg.setOutlineColor(sf::Color(200, 200, 200)); // 옅은 회색 테두리
+            minimapBg.setOutlineThickness(2.f);
+
+            window.draw(minimapBg);
+
+            // 2. 내 좌표를 백분율(비율)로 계산
+            // protocol_2026.h 에 정의된 WORLD_WIDTH, WORLD_HEIGHT를 사용합니다.
+            float playerRatioX = (float)myAvatar->x / WORLD_WIDTH;
+            float playerRatioY = (float)myAvatar->y / WORLD_HEIGHT;
+
+            // 3. 내 위치를 나타내는 초록색 점(Dot) 생성
+            sf::CircleShape myDot(4.f);
+            myDot.setOrigin(4.f, 4.f); // 중심점을 동그라미 한가운데로 맞춤
+
+            // 미니맵 좌상단 위치 + (미니맵 전체 크기 * 내 좌표 비율)
+            myDot.setPosition(minimapX + (minimapSize * playerRatioX),
+                minimapY + (minimapSize * playerRatioY));
+
+            myDot.setFillColor(sf::Color::Green);
+            myDot.setOutlineColor(sf::Color::Black);
+            myDot.setOutlineThickness(1.f);
+
+            window.draw(myDot);
 
             // 3. 상태 텍스트 (바 위쪽에 깔끔하게 배치)
             sf::Text uiText;

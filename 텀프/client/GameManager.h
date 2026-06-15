@@ -62,6 +62,18 @@ public:
         return GetObject(m_myId);
     }
 
+    void UpdateAll() {
+        for (auto& pair : m_objects) {
+            pair.second->updateAnimation();
+		}
+    }
+
+    void DrawAll(sf::RenderWindow& window) {
+        for (auto& pair : m_objects) {
+            pair.second->draw(window);
+        }
+	}
+
     // 매 프레임 모든 객체의 애니메이션을 갱신하고 그리기
     void UpdateAndDrawAll(sf::RenderWindow& window) {
         for (auto& pair : m_objects) {

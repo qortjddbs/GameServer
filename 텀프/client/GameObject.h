@@ -85,22 +85,30 @@ public:
         }
         sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
 
-        std::string typeStr = "";
-        switch (objectType) {
-        case ObjectType::SKELETON:          typeStr = "[skeleton] "; break;
-        case ObjectType::GOBLIN:            typeStr = "[goblin] "; break;
-        case ObjectType::FLYING_EYE:        typeStr = "[flying_eye] "; break;
-        case ObjectType::MUSHROOM:          typeStr = "[mushroom] "; break;
-        default:                            typeStr = ""; break; // 플레이어는 종류 생략
+        char textBuf[128];
+
+        if (objectType == ObjectType::PLAYER) {
+            // 플레이어: 닉네임만
+            sprintf_s(textBuf, "%s", name);
+        }
+        else {
+            // 몬스터: 레벨과 종류만 (좌표 제거)
+            std::string typeStr = "";
+            switch (objectType) {
+            case ObjectType::SKELETON:      typeStr = "skeleton"; break;
+            case ObjectType::GOBLIN:        typeStr = "goblin"; break;
+            case ObjectType::FLYING_EYE:    typeStr = "flying_eye"; break;
+            case ObjectType::MUSHROOM:      typeStr = "mushroom"; break;
+            default: break;
+            }
+            sprintf_s(textBuf, "Lv.%d [%s]", level, typeStr.c_str());
         }
 
-        char textBuf[128];
-        sprintf_s(textBuf, "Lv.%d %s\n(%d, %d)", level, typeStr.c_str(), x, y);
-        nameText.setString(textBuf); // 혹시 모를 인코딩 대비 AnsiToWide
+        nameText.setString(textBuf);
 
         sf::FloatRect textRect = nameText.getLocalBounds();
-		nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
-		nameText.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 - 25));
+        nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
+        nameText.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 - 25));
     }
 
     void setDirection(unsigned char dir) {

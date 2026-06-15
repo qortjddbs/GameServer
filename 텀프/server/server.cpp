@@ -25,6 +25,14 @@
 #pragma comment(lib, "mswsock.lib")
 #pragma comment(lib, "odbc32.lib")
 
+extern "C" {
+#include "lua.h"
+#include "lualib.h"
+#include "lauxlib.h"
+}
+
+#pragma comment (lib, "lua54.lib") // 파일명은 다운받으신 lib 파일 이름에 맞게 수정하세요! (예: lua54.lib, lua5.4.2.lib 등)
+
 
 constexpr int VIEW_RANGE = 7;         // 시야 반경 (8칸)
 constexpr int REGION_SIZE = 10;       // 한 지역(Region)의 가로/세로 길이
@@ -287,72 +295,105 @@ public:
 			player_id_pool.push(i);
 		}
 
-		// NPC용 세션 메모리 할당
-		for (int i = 0; i < NUM_NPCS; ++i) {
-			int real_index = MAX_PLAYERS + i;		// 실제 배열 인덱스
-			int npc_id = NPC_ID_START + i;			// 게임 속 NPC의 ID (100만~)
+		// ===============================================
+		// [LUA 몬스터 스크립트 기반 배치 적용]
+		// 기존 C++ 하드코딩 로직을 완전히 대체합니다.
+		// ===============================================
+		lua_State* L = luaL_newstate();
+		if (L != nullptr) {
+			luaL_openlibs(L);
 
-			sessions[real_index] = new Session();
-			sessions[real_index]->sessionIndex = real_index;
-			sessions[real_index]->id = npc_id;
-			sessions[real_index]->state.store(SessionState::INGAME);
-
-			sessions[real_index]->monster_type = static_cast<MonsterType>(i % 4);
-			MonsterType m_type = sessions[real_index]->monster_type;
-
-			short rx = 0, ry = 0;
-
-			if (m_type == MonsterType::MUSHROOM) {
-				// 1구역: 좌상단 (100~1000, 100~1000)
-				rx = (rand() % 900) + 100; 
-				ry = (rand() % 900) + 100;
-				sprintf_s(sessions[real_index]->name, "Mushroom_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::FIXED_PEACE;
-				sessions[real_index]->level = 5;
-				sessions[real_index]->max_hp = 50; sessions[real_index]->attack_power = 10;
+			if (luaL_dofile(L, "monster_spawn.lua") != LUA_OK) {
+				std::cout << "[LUA Error] 파일 읽기 실패: " << lua_tostring(L, -1) << std::endl;
 			}
-			else if (m_type == MonsterType::SKELETON) {
-				// 2구역: 우상단 (1000~2000, 0~1000)
-				rx = (rand() % 900) + 1000; 
-				ry = (rand() % 900) + 100;
-				sprintf_s(sessions[real_index]->name, "Skeleton_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
-				sessions[real_index]->level = 15;
-				sessions[real_index]->max_hp = 150; sessions[real_index]->attack_power = 25;
-			}
-			else if (m_type == MonsterType::GOBLIN) {
-				// 3구역: 좌하단 (100~1000, 1000~1900)
-				rx = (rand() % 900) + 100; 
-				ry = (rand() % 900) + 1000;
-				sprintf_s(sessions[real_index]->name, "Goblin_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
-				sessions[real_index]->level = 25;
-				sessions[real_index]->max_hp = 300; sessions[real_index]->attack_power = 40;
-			}
-			else if (m_type == MonsterType::FLYING_EYE) {
-				// 4구역: 우하단 (1000~2000, 1000~2000)
-				rx = (rand() % 900) + 1000; 
-				ry = (rand() % 900) + 1000;
-				sprintf_s(sessions[real_index]->name, "Flying_eye_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
-				sessions[real_index]->level = 35;
-				sessions[real_index]->max_hp = 500; sessions[real_index]->attack_power = 60;
-			}
+			else {
+				lua_getglobal(L, "MonsterSpawns");
 
-			sessions[real_index]->x = rx;
-			sessions[real_index]->y = ry;
-			sessions[real_index]->origin_x = rx;
-			sessions[real_index]->origin_y = ry;
-			sessions[real_index]->hp = sessions[real_index]->max_hp;
+				if (lua_istable(L, -1)) {
+					lua_pushnil(L);
 
-			rx = GetRegionX(sessions[real_index]->x);
-			ry = GetRegionY(sessions[real_index]->y);
-			{
-				std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
-				g_regions[rx][ry].objects.insert(npc_id);
+					int current_npc_id = NPC_ID_START; // 100000부터 시작
+
+					while (lua_next(L, -2) != 0) {
+						// 더 이상 스폰할 공간이 없으면 파싱 중단
+						if (current_npc_id >= NPC_ID_START + NUM_NPCS) {
+							lua_pop(L, 1);
+							break;
+						}
+
+						// 1. 데이터 추출
+						lua_getfield(L, -1, "name");
+						const char* m_name = lua_tostring(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "monster_type");
+						int m_type = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "ai_type");
+						int m_ai = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "level");
+						int m_level = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "x");
+						int m_x = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "y");
+						int m_y = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "hp");
+						int m_hp = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						lua_getfield(L, -1, "atk");
+						int m_atk = (int)lua_tointeger(L, -1);
+						lua_pop(L, 1);
+
+						// 2. 서버 메모리 할당 및 데이터 덮어쓰기
+						int real_index = MAX_PLAYERS + (current_npc_id - NPC_ID_START); // 안전한 배열 인덱스 계산!
+
+						sessions[real_index] = new Session();
+						Session* npc = sessions[real_index];
+
+						npc->sessionIndex = real_index;
+						npc->id = current_npc_id;
+
+						strcpy_s(npc->name, m_name);
+						npc->monster_type = static_cast<MonsterType>(m_type);
+						npc->ai_type = static_cast<AiType>(m_ai);
+						npc->level = m_level;
+						npc->x = m_x;
+						npc->y = m_y;
+						npc->origin_x = m_x;
+						npc->origin_y = m_y;
+						npc->max_hp = m_hp;
+						npc->hp = m_hp;
+						npc->attack_power = m_atk;
+
+						// 맵(Region)에 몬스터 등록
+						short rx = GetRegionX(npc->x);
+						short ry = GetRegionY(npc->y);
+						{
+							std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+							g_regions[rx][ry].objects.insert(current_npc_id);
+						}
+
+						// 게임 상태 활성화
+						npc->state.store(SessionState::INGAME);
+
+						current_npc_id++;
+						lua_pop(L, 1); // 다음 루프를 위해 값만 pop
+					}
+					std::cout << "[시스템] 스크립트 기반 몬스터 배치가 완료되었습니다! (총 " << (current_npc_id - NPC_ID_START) << "마리)" << std::endl;
+				}
 			}
+			lua_close(L);
 		}
-
 	}
 
 	bool Initialize() {
@@ -1188,7 +1229,7 @@ private:
 		chatPacket.size = sizeof(S2C_ChatMessage);
 		chatPacket.type = S2C_CHAT_MESSAGE;
 		chatPacket.object_id = player_id;
-		chatPacket.chatType = 0; // 시스템 메시지 타입
+		chatPacket.chatType = 2; // 시스템 메시지 타입
 		strcpy_s(chatPacket.message, msg);
 
 		player->SendPacket(&chatPacket);
@@ -1284,6 +1325,7 @@ private:
 
 							SQLExecDirect(hStmt, (SQLWCHAR*)wInsert.c_str(), SQL_NTS);
 
+							// 플레이어 초기 설정
 							dbCtx->db_level = 1;  dbCtx->db_exp = 0;  dbCtx->db_hp = 100;
 							dbCtx->db_x = 100;     dbCtx->db_y = 100;
 						}
