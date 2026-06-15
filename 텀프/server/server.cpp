@@ -316,9 +316,21 @@ private:
 	std::mutex timer_mock;
 	tbb::concurrent_queue<DbTask> db_queue;
 	std::thread db_worker;
+	struct DropItem {
+		std::atomic<bool> active{ false };
+		int item_id = 0;
+		short x = 0;
+		short y = 0;
+	};
+	DropItem g_items[5000];
+	tbb::concurrent_queue<int> item_id_pool;
 
 public:
 	IocpServer() {
+		for (int i = 0; i < 5000; ++i) {
+			item_id_pool.push(2000000 + i);
+		}
+
 		sessions.resize(MAX_PLAYERS + NUM_NPCS, nullptr);
 		// 플레이어용 세션 메모리 할당
 		for (int i = 0; i < MAX_PLAYERS; ++i) {
@@ -709,47 +721,63 @@ private:
 				old_view = obj->viewList;
 			}
 
+			// 1. 내 주변 시야에 들어온 객체들을 파악
 			std::unordered_set<int> new_view;
 			auto near_objs = GetNearbyObjects(nx, ny);
 			for (int n_id : near_objs) {
 				if (n_id == id) continue;
-				Session* target = GetSessionId(n_id);
-				if (target && target->state.load() == SessionState::INGAME && IsInView(nx, ny, target->x, target->y)) {
-					new_view.insert(n_id);
+
+				if (n_id >= 2000000) {
+					// [수정] 아이템일 경우 세션을 조회하지 않음! (서버 Crash 방지)
+					int idx = n_id - 2000000;
+					if (g_items[idx].active.load() && IsInView(nx, ny, g_items[idx].x, g_items[idx].y)) {
+						new_view.insert(n_id);
+					}
+				}
+				else {
+					// 플레이어나 NPC일 경우
+					Session* target = GetSessionId(n_id);
+					if (target && target->state.load() == SessionState::INGAME && IsInView(nx, ny, target->x, target->y)) {
+						new_view.insert(n_id);
+					}
 				}
 			}
 
+			// 2. 새로 발견한 객체와 기존 객체 패킷 전송
 			for (int n_id : new_view) {
 				if (old_view.count(n_id) == 0) {		// 새로 발견
-					if (IsPlayer(n_id)) {
+					if (n_id >= 2000000) {
+						// [추가] 시야에 들어온 것이 아이템이라면 렌더링 지시
+						int idx = n_id - 2000000;
+						if (g_items[idx].active.load()) {
+							S2C_AddItem itemPkt = { sizeof(itemPkt), S2C_ADD_ITEM, n_id, g_items[idx].x, g_items[idx].y, 0 };
+							obj->SendPacket(&itemPkt);
+						}
+					}
+					else if (IsPlayer(n_id)) {
 						SendAddObject(id, n_id);
 						SendAddObject(n_id, id);
 					}
 					else {
 						SendAddObject(id, n_id);
 						Session* npc = GetSessionId(n_id);
-						// NPC를 내 시야에 넣으면서 Reference Count 증가 및 깨우기
-						if (npc && npc->viewers_count.fetch_add(1) == 0) {
-							WakeUpNpc(n_id);
-						}
+						if (npc && npc->viewers_count.fetch_add(1) == 0) WakeUpNpc(n_id);
 					}
 				}
 				else {		// 기존에도 있던 객체
-					if (IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny, move_time);	// 기존에 보이던 객체 위치만 업데이트
+					if (n_id < 2000000 && IsPlayer(n_id)) SendMoveObject(n_id, id, nx, ny, move_time);
 				}
 			}
 
+			// 3. 시야에서 벗어난 객체 삭제
 			for (int o_id : old_view) {
-				if (new_view.count(o_id) == 0) {		// 시야에서 벗어남
+				if (new_view.count(o_id) == 0) {
 					SendRemoveObject(id, o_id);
-					if (IsPlayer(o_id)) {
-						SendRemoveObject(o_id, id);
-					}
-					else {
-						Session* npc = GetSessionId(o_id);
-						// NPC가 내 시야에서 벗어났으므로 Reference Count 감소 (0이 되면 알아서 잠듦)
-						if (npc) {
-							npc->viewers_count.fetch_sub(1);
+					if (o_id < 2000000) { // [방어코드] 아이템은 레퍼런스 카운트 연산 제외
+						if (IsPlayer(o_id)) SendRemoveObject(o_id, id);
+						else {
+							Session* npc = GetSessionId(o_id);
+							if (npc) npc->viewers_count.fetch_sub(1);
 						}
 					}
 				}
@@ -1153,6 +1181,29 @@ private:
 
 					if (victim->ai_type == AiType::ROAMING_AGGRO) {
 						exp_gained *= 2;
+					}
+
+					if (rand() % 100 < 30) {
+						int new_item_id;
+						if (item_id_pool.try_pop(new_item_id)) {
+							int idx = new_item_id - 2000000; // 200만을 빼서 배열 인덱스로 사용
+							g_items[idx].item_id = new_item_id;
+							g_items[idx].x = victim->x;
+							g_items[idx].y = victim->y;
+							g_items[idx].active.store(true);
+
+							// 1. 맵(Region)에 아이템 등록
+							short rx = GetRegionX(victim->x);
+							short ry = GetRegionY(victim->y);
+							{
+								std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+								g_regions[rx][ry].objects.insert(new_item_id);
+							}
+
+							// 2. 주변 유저들에게 아이템 스폰 패킷 발송
+							S2C_AddItem itemPkt = { sizeof(itemPkt), S2C_ADD_ITEM, new_item_id, victim->x, victim->y, 0 };
+							BroadcastToViewers(victim_id, &itemPkt);
+						}
 					}
 				}
 			}
@@ -1899,33 +1950,73 @@ private:
 				auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - session->last_move_time).count();
 
 				int move_cooldown = std::max(200, 500 - (session->level - 1) * 10);
-				// 1. 비정상적인 패킷 폭주 감지 (예: 0.5초가 정상인데 0.05초 만에 또 패킷이 옴)
-				// 네트워크 지연(핑 튀는 현상)을 고려하여 여유를 조금 둡니다 (예: 100ms 이하로 들어오면 비정상으로 간주)
 				if (duration < move_cooldown - 50) {
-					// std::cout << "[Warning] Player " << session->name << " is sending packets too fast! Disconnecting..." << std::endl;
-					// Disconnect(sessionId); // 즉시 쫓아냄
 					return;
 				}
 
 				session->last_move_time = now;
-
 				C2S_Move* movePacket = reinterpret_cast<C2S_Move*>(packet);
 
 				short nx = session->x;
 				short ny = session->y;
 
 				// 방향에 따른 다음 좌표 계산
-				 if (movePacket->direction == 0) ny -= 1;		// Up
-				 else if (movePacket->direction == 1) ny += 1;	// Down
-				 else if (movePacket->direction == 2) nx -= 1;	// Left
-				 else if (movePacket->direction == 3) nx += 1;	// Right
+				if (movePacket->direction == 0) ny -= 1;		// Up
+				else if (movePacket->direction == 1) ny += 1;	// Down
+				else if (movePacket->direction == 2) nx -= 1;	// Left
+				else if (movePacket->direction == 3) nx += 1;	// Right
 
 				if (nx >= 0 && nx < WORLD_WIDTH && ny >= 0 && ny < WORLD_HEIGHT) {
 					if (g_wall[nx][ny] == false) {		// 벽이 아닐 때만 이동 허가
 						if (nx < session->x) session->direction = 2;
 						else if (nx > session->x) session->direction = 3;
 
+						// [핵심] 이동 처리는 여기서 딱 한 번만 호출합니다!
 						MoveObject(sessionId, nx, ny, movePacket->move_time);
+
+						// -------------------------------------------------------------
+						// [추가] O(1) 초고속 안전 자동 루팅 시스템
+						// -------------------------------------------------------------
+						auto current_near_objs = GetNearbyObjects(nx, ny);
+						for (int obj_id : current_near_objs) {
+							if (obj_id >= 2000000) { // 주변에 아이템이 있다면
+								int idx = obj_id - 2000000;
+
+								// 내 좌표(nx, ny)와 아이템 좌표가 겹친다면 주웠다!
+								if (g_items[idx].active.load() && g_items[idx].x == nx && g_items[idx].y == ny) {
+									bool expected = true;
+									// 멀티쓰레드 동시 루팅 방지 (Atomic 연산)
+									if (g_items[idx].active.compare_exchange_strong(expected, false)) {
+										item_id_pool.push(obj_id); // 빈 번호표 반납
+
+										// 1. Region 지도에서 아이템 삭제
+										short rx = GetRegionX(nx); short ry = GetRegionY(ny);
+										{
+											std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+											g_regions[rx][ry].objects.erase(obj_id);
+										}
+
+										// 2. 체력 500 안전 회복
+										{
+											std::lock_guard<std::mutex> lock(session->sessionLock);
+											session->hp = std::min(session->max_hp, session->hp + 500);
+										}
+
+										// 3. 아이템 소멸 패킷 & 체력 갱신 패킷 브로드캐스트
+										S2C_RemoveObject rmPkt = { sizeof(rmPkt), S2C_REMOVE_OBJECT, obj_id };
+										BroadcastToViewers(sessionId, &rmPkt);
+										session->SendPacket(&rmPkt); // 나한테도 전송
+
+										S2C_StatusChange statusPkt = { sizeof(statusPkt), S2C_STATUS_CHANGE, sessionId, session->hp, session->max_hp, session->exp, session->level };
+										BroadcastToViewers(sessionId, &statusPkt);
+										session->SendPacket(&statusPkt);
+
+										SendSystemMessage(sessionId, "HP 포션을 획득하여 체력이 500 회복되었습니다!");
+									}
+								}
+							}
+						}
+						// -------------------------------------------------------------
 					}
 				}
 			}

@@ -335,15 +335,22 @@ int main() {
             g_screenShakeTime = 2.0f;
         }
         });
+    netMgr.RegisterHandler(S2C_ADD_ITEM, [](char* packet) {
+        auto p = reinterpret_cast<S2C_AddItem*>(packet);
+        auto obj = std::make_unique<GameObject>();
+        obj->id = p->item_id;
+        obj->objectType = ObjectType::POTION;
+
+        obj->isFirstSpawn = true;
+        obj->setPosition(p->x, p->y);
+
+        // 인자 2개(ID, 객체)를 정확히 넘겨줍니다.
+        GameManager::GetInstance().AddObject(p->item_id, std::move(obj));
+        });
 
     // ==========================================
-<<<<<<< HEAD
     // [초기화 3] 서버 접속 및 로그인
     // ==========================================   
-=======
-	// [초기화 3] 서버 접속 및 로그인
-	// ==========================================   
->>>>>>> f1a674f286df7d6d2b5f10c68e3f26f895c95ff1
     string server_ip;
     cout << "접속할 서버 IP를 입력하세요 : ";
     cin >> server_ip;

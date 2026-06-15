@@ -352,17 +352,14 @@ public:
 
     virtual void draw(sf::RenderWindow& window) {
         if (objectType == ObjectType::POTION) {
-            sf::CircleShape potion(12.f); // 반지름 12짜리 원형 아이템
-            potion.setFillColor(sf::Color(255, 50, 50)); // 포션 빨간색
+            sf::CircleShape potion(12.f);
+            potion.setFillColor(sf::Color(255, 50, 50));
             potion.setOutlineColor(sf::Color::White);
             potion.setOutlineThickness(2.f);
-
-            // 바닥에 살짝 떠 있는 느낌을 주도록 위치 조정
             potion.setOrigin(12.f, 12.f);
             potion.setPosition(x * 64 + 32, y * 64 + 32 + 10.f);
-
             window.draw(potion);
-            return; // 텍스처나 체력바를 그리지 않고 즉시 종료!
+            return; // 텍스처, 체력바, 말풍선을 그리지 않고 즉시 종료!
         }
 
         float scale = 1.0f;
