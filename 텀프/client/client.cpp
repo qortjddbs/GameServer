@@ -348,7 +348,7 @@ int main() {
     if (!netMgr.Connect(server_ip, PORT)) {
         cout << "서버 연결 실패!" << endl;
         system("pause");
-        return -1;
+        return -1; 
     }
 
     string input_id;
