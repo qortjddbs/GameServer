@@ -53,8 +53,8 @@ for i = count, 200000 do
         level = m_level,
         x = rx,
         y = ry,
-        hp = m_level * 10,       -- [밸런스 조절] 체력 계수 살짝 하향
-        atk = m_level * 5        -- [밸런스 조절] 너무 아프지 않게 공격력 하향
+        hp = 100 + (m_level * 50),       -- [밸런스 조절] 체력 계수 살짝 하향
+        atk = 10 + (m_level * 10)        -- [밸런스 조절] 너무 아프지 않게 공격력 하향
     }
 end
 

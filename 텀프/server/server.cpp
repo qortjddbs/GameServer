@@ -1253,7 +1253,7 @@ private:
 							attacker->exp -= required_exp;
 							attacker->level++;
 							attacker->max_hp += 50;
-							attacker->attack_power += 50;
+							attacker->attack_power += 30;
 							attacker->hp = attacker->max_hp;
 							is_leveled_up = true;
 
@@ -1759,7 +1759,7 @@ private:
 					session->exp = ioCtx->db_exp;
 					session->hp = ioCtx->db_hp;
 					session->max_hp = 100 + ((session->level - 1) * 50); // 레벨 비례 최대체력
-					session->attack_power = 50 + ((session->level - 1) * 50);
+					session->attack_power = 30 + ((session->level - 1) * 30);
 					session->x = ioCtx->db_x;
 					session->y = ioCtx->db_y;
 					session->state = SessionState::INGAME;
@@ -2112,7 +2112,7 @@ private:
 									// 레벨에 따른 스탯 재계산 (기존 DB 로딩 규칙과 동일하게 맞춤)
 									session->max_hp = 100 + ((session->level - 1) * 50);
 									session->hp = session->max_hp; // 풀피 회복
-									session->attack_power = 50 + ((session->level - 1) * 50);
+									session->attack_power = 30 + ((session->level - 1) * 30);
 								}
 
 								// 상태 갱신 패킷을 나와 주변에 뿌려서 UI 업데이트 및 렌더링 반영
