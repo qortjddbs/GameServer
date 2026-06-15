@@ -85,30 +85,38 @@ public:
         }
         sprite.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 + 32));
 
+        if (strncmp(name, "Boss", 4) == 0) {
+            sprite.setScale(2.5f, 2.5f); // 일반 버섯보다 2.5배 거대화
+            nameText.setFillColor(sf::Color::Red);
+        }
+
         char textBuf[128];
 
-        if (objectType == ObjectType::PLAYER) {
-            // 플레이어: 닉네임만
+        nameText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
+
+        if (objectType == ObjectType::PLAYER) { // 혹은 objectType == ObjectType::PLAYER
+            // 플레이어: 이름만 하얗고 선명하게 (크기 14)
             sprintf_s(textBuf, "%s", name);
+            nameText.setCharacterSize(14);
+            nameText.setFillColor(sf::Color::White);
+
+            nameText.setString(textBuf);
+            sf::FloatRect textRect = nameText.getLocalBounds();
+            nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
+            nameText.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 - 25));
         }
         else {
-            // 몬스터: 레벨과 종류만 (좌표 제거)
-            std::string typeStr = "";
-            switch (objectType) {
-            case ObjectType::SKELETON:      typeStr = "skeleton"; break;
-            case ObjectType::GOBLIN:        typeStr = "goblin"; break;
-            case ObjectType::FLYING_EYE:    typeStr = "flying_eye"; break;
-            case ObjectType::MUSHROOM:      typeStr = "mushroom"; break;
-            default: break;
-            }
-            sprintf_s(textBuf, "Lv.%d [%s]", level, typeStr.c_str());
+            // 몬스터: 이름만 작고 어둡게 (크기 11) - 레벨과 종류는 제거해서 깔끔하게 만듦
+            sprintf_s(textBuf, "Lv.%d", level);
+            nameText.setCharacterSize(12);
+            nameText.setFillColor(sf::Color::Yellow);
+
+            nameText.setString(textBuf);
+            sf::FloatRect textRect = nameText.getLocalBounds();
+            nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
+            // 체력바를 옆에 그리기 위해 텍스트를 살짝 왼쪽으로 치움
+            nameText.setPosition(static_cast<float>(x * 64 + 32 - 20), static_cast<float>(y * 64 - 28));
         }
-
-        nameText.setString(textBuf);
-
-        sf::FloatRect textRect = nameText.getLocalBounds();
-        nameText.setOrigin(textRect.width / 2.0f, textRect.height / 2.0f);
-        nameText.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 - 25));
     }
 
     void setDirection(unsigned char dir) {
@@ -341,32 +349,55 @@ public:
     }
 
     virtual void draw(sf::RenderWindow& window) {
+        float scale = 1.0f;
+        float y_offset = 0.f;
+
+        // 보스일 경우 크기는 2.5배 키우고, UI 좌표는 위로 80픽셀 끌어올림!
+        if (strncmp(name, "Boss_", 5) == 0) {
+            scale = 2.5f;
+            y_offset = -80.f;
+        }
+
         window.draw(sprite);
         window.draw(nameText);
 
-        sf::Vector2f pos = sprite.getPosition();
+        sf::FloatRect nameRect = nameText.getLocalBounds();
+        nameText.setOrigin(nameRect.width / 2.0f, nameRect.height / 2.0f);
 
-        if (max_hp > 0 && objectType != ObjectType::PLAYER) {
-            float hpRatio = (float)hp / max_hp;
-            if (hpRatio < 0) hpRatio = 0;
+        if (objectType == ObjectType::PLAYER) {
+            nameText.setPosition(static_cast<float>(x * 64 + 32), static_cast<float>(y * 64 - 25) + y_offset);
+            window.draw(nameText);
 
-            // 배경 (빈 피통이 눈에 확 띄도록 찐한 검정색 + 밝은 테두리)
-            sf::RectangleShape hpBg(sf::Vector2f(60.f, 8.f));
-            hpBg.setPosition(pos.x - 30.f, pos.y - 70.f);
-            hpBg.setFillColor(sf::Color(15, 15, 15, 255));
-            hpBg.setOutlineColor(sf::Color(150, 150, 150, 150)); // 테두리를 살짝 밝게
-            hpBg.setOutlineThickness(1.f);
-
-            // 남은 체력 채우기 (피가 0보다 클 때만 그려줌)
-            window.draw(hpBg);
             if (hp >= 0) {
+                float hpRatio = (float)hp / max_hp;
                 sf::RectangleShape hpFill(sf::Vector2f(60.f * hpRatio, 8.f));
-                hpFill.setPosition(pos.x - 30.f, pos.y - 70.f);
+                hpFill.setPosition(x * 64 + 32 - 30.f, y * 64 - 40.f + y_offset);
                 hpFill.setFillColor(sf::Color(220, 50, 50));
                 window.draw(hpFill);
             }
         }
+        else {
+            nameText.setPosition(static_cast<float>(x * 64 + 32 - 20), static_cast<float>(y * 64 - 28) + y_offset);
+            window.draw(nameText);
 
+            if (hp >= 0) {
+                float hpRatio = (float)hp / max_hp;
+                sf::RectangleShape hpBg(sf::Vector2f(30.f, 6.f));
+                hpBg.setPosition(x * 64 + 32.f, y * 64 - 31.f + y_offset);
+                hpBg.setFillColor(sf::Color(50, 50, 50));
+
+                sf::RectangleShape hpFill(sf::Vector2f(30.f * hpRatio, 6.f));
+                hpFill.setPosition(x * 64 + 32.f, y * 64 - 31.f + y_offset);
+                hpFill.setFillColor(sf::Color(255, 50, 50));
+
+                window.draw(hpBg);
+                window.draw(hpFill);
+            }
+        }
+
+        // -----------------------------------------------------------------
+        // 2. 말풍선 그리기 (y_offset 적용 완료!)
+        // -----------------------------------------------------------------
         if (chatMsg.getSize() > 0 && chatTimer.getElapsedTime().asSeconds() < 5.0f) {
             sf::Text bubbleText;
             bubbleText.setFont(ResourceManager::GetInstance().GetFont("main_font"));
@@ -376,17 +407,15 @@ public:
             bubbleText.setOutlineThickness(1.5f);
             bubbleText.setString(chatMsg);
 
-            // 글자 크기에 맞춰 검은색 반투명 말풍선 배경 생성
             sf::FloatRect textBounds = bubbleText.getLocalBounds();
             sf::RectangleShape bubble(sf::Vector2f(textBounds.width + 20.f, 28.f));
             bubble.setFillColor(sf::Color(0, 0, 0, 180));
             bubble.setOutlineColor(sf::Color(150, 150, 150, 200));
             bubble.setOutlineThickness(1.5f);
 
-            // 위치 세팅 (머리 위 HP 바보다 조금 더 위에 배치)
-            sf::Vector2f pos = sprite.getPosition();
-            bubble.setPosition(pos.x - textBounds.width / 2.f - 10.f, pos.y - 110.f);
-            bubbleText.setPosition(pos.x - textBounds.width / 2.f, pos.y - 107.f);
+            // 말풍선이 뱃속이 아니라 거대 보스 머리 위에 정상적으로 뜨도록 y_offset 추가!
+            bubble.setPosition(x * 64 + 32 - textBounds.width / 2.0f - 10.f, y * 64 - 55.f + y_offset);
+            bubbleText.setPosition(x * 64 + 32 - textBounds.width / 2.0f, y * 64 - 53.f + y_offset);
 
             window.draw(bubble);
             window.draw(bubbleText);

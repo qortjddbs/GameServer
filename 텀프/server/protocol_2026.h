@@ -1,5 +1,4 @@
 #pragma once
-
 constexpr short PORT = 3500;
 constexpr int WORLD_WIDTH = 2000;
 constexpr int WORLD_HEIGHT = 2000;
@@ -34,6 +33,7 @@ enum PACKET_TYPE {
 	S2C_STATUS_CHANGE,	//	Server to Client: Update player or NPC status (e.g., health, buffs)	
 
 	S2C_ACTION,			//	공격, 방어 등 단발성 애니메이션 전파용
+	S2C_SKILL_EFFECT,	//	보스 스킬 이펙트 전파용 (경고장판 + 폭발)
 };
 
 #pragma pack(push, 1) // Ensure no padding between struct members
@@ -152,6 +152,15 @@ struct S2C_Action {
 	PACKET_TYPE type;
 	int object_id;
 	unsigned char actionType; // 1: Attack1, 2: Attack2, 3: Guard 등
+};
+
+struct S2C_SkillEffect {
+	unsigned char size;
+	PACKET_TYPE type;
+	int object_id;      // 누가 스킬을 썼는지
+	short x;            // 타겟 X 좌표
+	short y;            // 타겟 Y 좌표
+	unsigned char effect_type; // 0: 빨간색 경고 장판, 1: 실제 폭발 이펙트
 };
 
 #pragma pack(pop) // Restore default packing

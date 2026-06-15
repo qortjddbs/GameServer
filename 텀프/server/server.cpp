@@ -33,6 +33,19 @@ extern "C" {
 
 #pragma comment (lib, "lua54.lib") // 파일명은 다운받으신 lib 파일 이름에 맞게 수정하세요! (예: lua54.lib, lua5.4.2.lib 등)
 
+class IocpServer;
+IocpServer* g_server = nullptr; // 전역 C-API 함수들이 서버 기능에 접근할 수 있게 해주는 마스터 키
+
+std::string UTF8ToANSI(const char* utf8_str) {
+	int wLen = MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, NULL, 0);
+	std::wstring wStr(wLen, 0);
+	MultiByteToWideChar(CP_UTF8, 0, utf8_str, -1, &wStr[0], wLen);
+
+	int aLen = WideCharToMultiByte(CP_ACP, 0, wStr.c_str(), -1, NULL, 0, NULL, NULL);
+	std::string aStr(aLen, 0);
+	WideCharToMultiByte(CP_ACP, 0, wStr.c_str(), -1, &aStr[0], aLen, NULL, NULL);
+	return aStr;
+}
 
 constexpr int VIEW_RANGE = 7;         // 시야 반경 (8칸)
 constexpr int REGION_SIZE = 10;       // 한 지역(Region)의 가로/세로 길이
@@ -68,7 +81,7 @@ void InitServerMap() {
 }
 
 enum class SessionState { FREE, CONNECTED, INGAME, DEAD };
-enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN, EVENT_HP_RECOVERY, EVENT_AUTO_SAVE };
+enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN, EVENT_HP_RECOVERY, EVENT_AUTO_SAVE, EVENT_BOSS_SKILL, EVENT_BOSS_ULT };
 enum class MonsterType { SKELETON, GOBLIN, FLYING_EYE, MUSHROOM };
 enum class AiType { FIXED_PEACE, ROAMING_AGGRO };
 enum ActionType : char { ACTION_ATTACK = 1, ACTION_HIT = 5, ACTION_DEAD = 6 };
@@ -140,6 +153,7 @@ public:
 	unsigned long long exp = 0;
 	unsigned char level = 1;
 	char name[MAX_NAME_LEN]{};
+	bool is_god = false;
 
 	std::chrono::steady_clock::time_point last_move_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
 	std::chrono::steady_clock::time_point last_attack_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
@@ -161,6 +175,13 @@ public:
 	IOContext recvContext{ IO_OP::RECV };
 	int prevRemainBytes = 0;
 
+	lua_State* L_ai = nullptr; // 보스 전용 Lua AI 두뇌 (일반 몬스터는 nullptr)
+	bool is_enraged = false;   // 광폭화 상태 체크용 (C++ 단에서도 체크용으로 하나 둡니다)
+
+	short skill_target_x = 0;
+	short skill_target_y = 0;
+	std::chrono::steady_clock::time_point last_skill_time = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+
 	void Reset() {		// Reset 함수를 실행하는동안 lock_guard가 자동으로 {}를 잠구고 해제해줌.
 		std::lock_guard<std::mutex> lock(sessionLock);
 		if (socket != INVALID_SOCKET) {
@@ -175,6 +196,13 @@ public:
 
 		playerNum++;	// 손님이 바뀔 때마다 세대 번호 증가
 		state.store(SessionState::FREE);
+
+		if (L_ai != nullptr) {
+			lua_close(L_ai);
+			L_ai = nullptr;
+		}
+		is_enraged = false;
+		is_god = false;
 	}
 
 	void SendPacket(void* packet) {
@@ -269,6 +297,10 @@ std::unordered_set<int> GetNearbyObjects(short cur_x, short cur_y) {
 	return nearby_objs;
 }
 
+int API_BossChat(lua_State* L);
+
+int API_CastAoESkill(lua_State* L);
+
 // 전체 서버를 총괄하는 메인 엔진 클래스
 class IocpServer
 {
@@ -346,6 +378,11 @@ public:
 						int m_y = (int)lua_tointeger(L, -1);
 						lua_pop(L, 1);
 
+						while (m_x < 0 || m_x >= WORLD_WIDTH || m_y < 0 || m_y >= WORLD_HEIGHT || g_wall[m_x][m_y]) {
+							m_x = (rand() % (WORLD_WIDTH - 40)) + 20; // 맵 끝부분은 피해서 랜덤 스폰
+							m_y = (rand() % (WORLD_HEIGHT - 40)) + 20;
+						}
+
 						lua_getfield(L, -1, "hp");
 						int m_hp = (int)lua_tointeger(L, -1);
 						lua_pop(L, 1);
@@ -375,6 +412,21 @@ public:
 						npc->hp = m_hp;
 						npc->attack_power = m_atk;
 
+						// [추가] 만약 이 녀석이 보스 몬스터라면 전용 Lua AI를 심어준다!
+						if (strncmp(m_name, "Boss_", 5) == 0) {
+							npc->L_ai = luaL_newstate();
+							luaL_openlibs(npc->L_ai);
+
+							// C++ API 등록
+							lua_register(npc->L_ai, "API_BossChat", API_BossChat);
+							lua_register(npc->L_ai, "API_CastAoESkill", API_CastAoESkill);
+
+							// 보스 AI 스크립트 로드
+							if (luaL_dofile(npc->L_ai, "boss_ai.lua") != LUA_OK) {
+								// std::cout << "[LUA Error] 보스 AI 로드 실패!" << std::endl;
+							}
+						}
+
 						// 맵(Region)에 몬스터 등록
 						short rx = GetRegionX(npc->x);
 						short ry = GetRegionY(npc->y);
@@ -389,7 +441,7 @@ public:
 						current_npc_id++;
 						lua_pop(L, 1); // 다음 루프를 위해 값만 pop
 					}
-					std::cout << "[시스템] 스크립트 기반 몬스터 배치가 완료되었습니다! (총 " << (current_npc_id - NPC_ID_START) << "마리)" << std::endl;
+					// std::cout << "[시스템] 스크립트 기반 몬스터 배치가 완료되었습니다! (총 " << (current_npc_id - NPC_ID_START) << "마리)" << std::endl;
 				}
 			}
 			lua_close(L);
@@ -444,6 +496,89 @@ public:
 	void Join() {
 		for (auto& th : workers) th.join();
 		if (db_worker.joinable()) db_worker.join();
+	}
+
+	// 보스 광역기 연산 및 패킷 발송
+	void ExecuteBossAoE(int boss_id, int damage) {
+		Session* boss = GetSessionId(boss_id);
+		if (!boss) return;
+
+		// std::cout << "[BOSS ULTIMATE] 보스가 반경 15칸 즉사기 시전 준비!" << std::endl;
+
+		// 1. 즉사기 경고용 '보라색 거대 장판' 패킷 생성 (이펙트 타입 3번)
+		S2C_SkillEffect eff = { sizeof(eff), S2C_SKILL_EFFECT, boss_id, boss->x, boss->y, 3 };
+
+		// 20칸 내 모든 유저에게 경고 장판 전송
+		auto near_objs = GetNearbyObjects(boss->x, boss->y);
+		for (int target_id : near_objs) {
+			if (IsPlayer(target_id)) {
+				Session* player = GetSessionId(target_id);
+				if (player && player->state.load() == SessionState::INGAME) {
+					player->SendPacket(&eff);
+				}
+			}
+		}
+
+		// 2. 2초 뒤에 펑 터지도록 타이머 예약 (좌표와 데미지를 임시로 기억해 둠)
+		boss->skill_target_x = boss->x;
+		boss->skill_target_y = boss->y;
+		boss->attack_power = damage; // 궁극기 데미지(3000) 임시 저장
+		AddTimerEvent(boss_id, EventType::EVENT_BOSS_ULT, 10000);
+	}
+
+	// 보스 말풍선 띄우기
+	void BroadcastBossChat(int boss_id, const char* msg) {
+		Session* boss = GetSessionId(boss_id);
+		if (!boss) return;
+
+		S2C_ChatMessage chatPacket;
+		chatPacket.size = sizeof(S2C_ChatMessage);
+		chatPacket.type = S2C_CHAT_MESSAGE;
+		chatPacket.object_id = boss_id;
+		chatPacket.chatType = 0;
+		sprintf_s(chatPacket.message, "[%s] %s", boss->name, msg);
+
+		// 시야에 없어도 멀리서 보스의 고함 소리가 들리도록 20칸 내 모든 유저에게 전송
+		auto near_objs = GetNearbyObjects(boss->x, boss->y);
+		for (int i = 0; i < MAX_PLAYERS; ++i) {
+			Session* pSession = sessions[i];
+			if (pSession && pSession->state.load() == SessionState::INGAME) {
+				pSession->SendPacket(&chatPacket);
+			}
+		}
+	}
+
+	void ProcessBossUltimate(int boss_id) {
+		Session* boss = GetSessionId(boss_id);
+		if (!boss || boss->state.load() != SessionState::INGAME) return;
+
+		// 지진 및 피보라 폭발 이펙트 (타입 2번)
+		S2C_SkillEffect eff = { sizeof(eff), S2C_SKILL_EFFECT, boss_id, boss->skill_target_x, boss->skill_target_y, 2 };
+
+		auto near_objs = GetNearbyObjects(boss->skill_target_x, boss->skill_target_y);
+		for (int target_id : near_objs) {
+			if (IsPlayer(target_id)) {
+				Session* player = GetSessionId(target_id);
+				if (player && player->state.load() == SessionState::INGAME) {
+					int dist = abs(boss->skill_target_x - player->x) + abs(boss->skill_target_y - player->y);
+
+					if (dist <= 15) { // 15칸 이내에 도망 못친 유저들
+						player->SendPacket(&eff); // 화면 흔들림 패킷 전송
+						HandleDamage(boss_id, target_id, 2000); // 3000 데미지 쾅!
+
+						// 무자비한 5칸 넉백
+						int push_x = player->x;
+						int push_y = player->y;
+						if (player->x < boss->skill_target_x) push_x -= 5; else if (player->x > boss->skill_target_x) push_x += 5;
+						if (player->y < boss->skill_target_y) push_y -= 5; else if (player->y > boss->skill_target_y) push_y += 5;
+
+						if (push_x >= 0 && push_x < WORLD_WIDTH && push_y >= 0 && push_y < WORLD_HEIGHT && !g_wall[push_x][push_y]) {
+							MoveObject(target_id, push_x, push_y);
+						}
+					}
+				}
+			}
+		}
 	}
 
 private:
@@ -738,6 +873,9 @@ private:
 		Session* npc = GetSessionId(npc_id);
 		if (!npc || npc->state.load() != SessionState::INGAME) return;
 
+		int move_delay = 500;
+		if (strncmp(npc->name, "Boss_", 5) == 0) move_delay = 1000;
+
 		short nx = npc->x;
 		short ny = npc->y;
 		bool hasAggroTarget = false;
@@ -797,6 +935,26 @@ private:
 			
 			// 타겟과의 거리 계산
 			int dist = abs(npc->x - targetX) + abs(npc->y - targetY);
+
+			if (strncmp(npc->name, "Boss_", 5) == 0 && dist <= 4) {
+				auto now = std::chrono::steady_clock::now();
+				if (std::chrono::duration_cast<std::chrono::milliseconds>(now - npc->last_skill_time).count() > 5000) {
+					npc->last_skill_time = now;
+					npc->skill_target_x = targetX;
+					npc->skill_target_y = targetY;
+
+					// 1. 클라이언트들에게 '경고 장판(0)' 띄우라고 지시
+					S2C_SkillEffect eff = { sizeof(eff), S2C_SKILL_EFFECT, npc_id, targetX, targetY, 0 };
+					BroadcastToViewers(npc_id, &eff);
+
+					// 2. 1.5초(1500ms) 뒤에 실제 폭발 데미지가 들어가도록 타이머 예약
+					AddTimerEvent(npc_id, EventType::EVENT_BOSS_SKILL, 1500);
+
+					// 스킬을 시전하는 동안에는 제자리에 멈춰있도록 이동 예약만 걸고 바로 리턴
+					AddTimerEvent(npc_id, EventType::EVENT_MOVE, move_delay);
+					return;
+				}
+			}
 
 			// 몬스터 사거리 판단
 			int attack_range = 1;
@@ -858,7 +1016,7 @@ private:
 		}
 
 		if (npc->viewers_count.load() > 0) {
-			AddTimerEvent(npc_id, EventType::EVENT_MOVE, 500);	// 다음 이동 예약 (0.5초마다 이동)
+			AddTimerEvent(npc_id, EventType::EVENT_MOVE, move_delay);
 		}
 		else {
 			// 주변에 플레이어가 없으면 비활성화
@@ -874,8 +1032,15 @@ private:
 
 		std::lock_guard<std::mutex> lock(npc->sessionLock);
 		npc->hp = npc->max_hp;
-		npc->x = (rand() % 1800) + 100;		// 100 ~ 2000
-		npc->y = (rand() % 1800) + 100;		// 100 ~ 2000
+
+		short spawn_x, spawn_y;
+		do {
+			spawn_x = (rand() % 1800) + 100;
+			spawn_y = (rand() % 1800) + 100;
+		} while (g_wall[spawn_x][spawn_y]);
+
+		npc->x = spawn_x;
+		npc->y = spawn_y;
 		npc->state.store(SessionState::INGAME);
 
 		// Region 재등록 및 뷰리스트 갱신
@@ -916,6 +1081,8 @@ private:
 
 		if (!attacker || !victim || attacker->state.load() != SessionState::INGAME || victim->state.load() != SessionState::INGAME) return;
 	
+		if (IsPlayer(victim_id) && victim->is_god) return;
+
 		// 플레이어 피격 시 일정시간 무적
 		if (IsPlayer(victim_id)) {
 			auto now = std::chrono::steady_clock::now();
@@ -945,6 +1112,23 @@ private:
 		{
 			std::lock_guard<std::mutex> lock(victim->sessionLock);
 			victim->hp -= damage;
+
+			// [추가] 보스 몬스터(L_ai 존재)가 아직 광폭화 상태가 아닐 때만 Lua 호출
+			if (victim->L_ai != nullptr && !victim->is_enraged && victim->hp > 0) {
+				lua_getglobal(victim->L_ai, "OnDamageTaken");
+				lua_pushinteger(victim->L_ai, victim->id); // [추가] 첫 번째 인자로 내 ID를 넘김
+				lua_pushnumber(victim->L_ai, victim->hp);
+				lua_pushnumber(victim->L_ai, victim->max_hp);
+
+				// 파라미터가 3개가 되었으므로 pcall의 두 번째 인자를 3으로 변경
+				if (lua_pcall(victim->L_ai, 3, 1, 0) == LUA_OK) {
+					int is_enraged_result = (int)lua_tointeger(victim->L_ai, -1);
+					if (is_enraged_result == 1) {
+						victim->is_enraged = true;
+					}
+					lua_pop(victim->L_ai, 1);
+				}
+			}
 
 			// 몬스터가 맞았고, 기존에 타겟이 없었다면 공격자를 타겟으로 설정
 			if (!IsPlayer(victim_id) && victim->hp > 0 && victim->target_id == -1) {
@@ -1317,6 +1501,7 @@ private:
 							SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
 
 							char insertQuery[256];
+							// 플레이어 초기 설정
 							sprintf_s(insertQuery, "INSERT INTO users (name, level, exp, hp, x, y) VALUES ('%s', 1, 0, 100, 100, 100)", task.username);
 
 							int len2 = MultiByteToWideChar(CP_ACP, 0, insertQuery, -1, NULL, 0);
@@ -1384,6 +1569,48 @@ private:
 
 		// [중요] 다음 1분 뒤에 다시 저장되도록 무한 오토세이브 루프 가동
 		AddTimerEvent(player_id, EventType::EVENT_AUTO_SAVE, 60000);
+	}
+
+	void ProcessBossSkillFire(int boss_id) {
+		Session* boss = GetSessionId(boss_id);
+		if (!boss || boss->state.load() != SessionState::INGAME) return;
+
+		short sx = boss->skill_target_x;
+		short sy = boss->skill_target_y;
+
+		// 1. 클라이언트들에게 '폭발 이펙트(1)' 터트리라고 지시
+		S2C_SkillEffect eff = { sizeof(eff), S2C_SKILL_EFFECT, boss_id, sx, sy, 1 };
+		BroadcastToViewers(boss_id, &eff);
+
+		// 2. 해당 장판 위치(sx, sy) 기준 십자 1칸 이내에 아직도 남아있는 멍청한(?) 플레이어 색출
+		auto near_objs = GetNearbyObjects(sx, sy);
+		for (int p_id : near_objs) {
+			if (IsPlayer(p_id)) {
+				Session* p = GetSessionId(p_id);
+				if (p && p->state.load() == SessionState::INGAME) {
+					int dist = abs(p->x - sx) + abs(p->y - sy);
+					if (dist <= 1) { // 폭발 반경 안에 있다면
+						// 데미지 2배 적용
+						HandleDamage(boss_id, p_id, boss->attack_power * 2);
+
+						// 넉백(Knockback) 로직: 폭발 중심점에서 반대 방향으로 1칸 밀쳐냄
+						int push_x = p->x;
+						int push_y = p->y;
+
+						if (p->x < sx) push_x -= 1; // 왼쪽에 있었으면 더 왼쪽으로
+						else if (p->x > sx) push_x += 1;
+
+						if (p->y < sy) push_y -= 1;
+						else if (p->y > sy) push_y += 1;
+
+						// 밀려나는 곳이 벽이 아니라면 강제 이동!
+						if (push_x >= 0 && push_x < WORLD_WIDTH && push_y >= 0 && push_y < WORLD_HEIGHT && !g_wall[push_x][push_y]) {
+							MoveObject(p_id, push_x, push_y);
+						}
+					}
+				}
+			}
+		}
 	}
 
 	void WorkerLoop() {
@@ -1465,6 +1692,8 @@ private:
 				else if (type == EventType::EVENT_DESPAWN) KillObject(obj_id);
 				else if (type == EventType::EVENT_HP_RECOVERY) ProcessHpRecovery(obj_id);
 				else if (type == EventType::EVENT_AUTO_SAVE) ProcessAutoSave(obj_id);
+				else if (type == EventType::EVENT_BOSS_SKILL) ProcessBossSkillFire(obj_id);
+				else if (type == EventType::EVENT_BOSS_ULT) ProcessBossUltimate(obj_id);
 
 				delete ioCtx;
 				break;
@@ -1761,6 +1990,27 @@ private:
 			else if (type == C2S_CHAT) {
 				C2S_Chat* chatPacket = reinterpret_cast<C2S_Chat*>(packet);
 
+				if (chatPacket->message[0] == '/') {
+					// 1. 순간이동 명령어 (/tp X Y)
+					if (strncmp(chatPacket->message, "/tp ", 4) == 0) {
+						int tx, ty;
+						if (sscanf_s(chatPacket->message + 4, "%d %d", &tx, &ty) == 2) {
+							if (tx >= 0 && tx < WORLD_WIDTH && ty >= 0 && ty < WORLD_HEIGHT) {
+								MoveObject(sessionId, static_cast<short>(tx), static_cast<short>(ty));
+								SendSystemMessage(sessionId, "지정된 좌표로 순간이동 했습니다.");
+							}
+						}
+						return; // 일반 채팅 패킷 처리를 하지 않고 리턴
+					}
+					// 2. 무적 명령어 (/god)
+					else if (strcmp(chatPacket->message, "/god") == 0) {
+						session->is_god = !session->is_god;
+						if (session->is_god) SendSystemMessage(sessionId, "무적 모드가 활성화되었습니다.");
+						else SendSystemMessage(sessionId, "무적 모드가 해제되었습니다.");
+						return;
+					}
+				}
+
 				S2C_ChatMessage broadcastPacket;
 				broadcastPacket.size = sizeof(broadcastPacket);
 				broadcastPacket.type = S2C_CHAT_MESSAGE;
@@ -1823,11 +2073,30 @@ private:
 	}
 };
 
+int API_BossChat(lua_State* L) {
+	int my_id = (int)lua_tointeger(L, 1);
+	const char* message = lua_tostring(L, 2);
+	std::string ansiMsg = UTF8ToANSI(message);
+
+	if (g_server) g_server->BroadcastBossChat(my_id, ansiMsg.c_str());
+	return 0;
+}
+
+int API_CastAoESkill(lua_State* L) {
+	int my_id = (int)lua_tointeger(L, 1);
+	int aoe_damage = (int)lua_tointeger(L, 2);
+
+	if (g_server) g_server->ExecuteBossAoE(my_id, aoe_damage);
+	return 0;
+}
+
 int main()
 {
 	InitServerMap();
 
 	IocpServer server;
+	g_server = &server;
+
 	if (server.Initialize()) {
 		server.Start();
 		server.Join();

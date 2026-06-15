@@ -23,6 +23,13 @@ private:
     };
     std::vector<AttackEffect> m_effects;
 
+    struct BossSkillEffect {
+        int x, y;
+        int type; // 0: 경고장판, 1: 폭발
+        sf::Clock timer;
+    };
+    std::vector<BossSkillEffect> m_bossEffects;
+
     // 싱글톤 패턴을 위한 private 생성자
     GameManager() = default;
 
@@ -131,5 +138,63 @@ public:
                 ++it;
             }
         }
+
+        for (auto it = m_bossEffects.begin(); it != m_bossEffects.end(); ) {
+            float elapsed = it->timer.getElapsedTime().asSeconds();
+
+            // 컷신 폭발(2)과 궁극기 경고장판(3)은 2.0초 동안 유지됨
+            if ((it->type == 0 && elapsed > 1.5f) || (it->type == 1 && elapsed > 0.5f) ||
+                ((it->type == 2 || it->type == 3) && elapsed > 2.0f)) {
+                it = m_bossEffects.erase(it);
+                continue;
+            }
+
+            sf::CircleShape shape;
+            if (it->type == 0) {
+                // 일반 스킬 장판
+                shape.setRadius(64.f * 1.5f);
+                shape.setOrigin(shape.getRadius(), shape.getRadius());
+                shape.setFillColor(sf::Color(255, 0, 0, 80));
+                shape.setOutlineColor(sf::Color::Red);
+                shape.setOutlineThickness(2.f);
+            }
+            else if (it->type == 1) {
+                // 일반 스킬 폭발
+                shape.setRadius(64.f * 1.5f);
+                shape.setOrigin(shape.getRadius(), shape.getRadius());
+                shape.setFillColor(sf::Color(255, 150, 0, 200));
+            }
+            else if (it->type == 2) {
+                // 즉사기 화면 컷신 피보라 폭발
+                shape.setRadius(64.f * 15.f);
+                shape.setOrigin(shape.getRadius(), shape.getRadius());
+                int alpha = std::max(0, 180 - (int)(elapsed * 90));
+                shape.setFillColor(sf::Color(255, 0, 0, alpha));
+            }
+            // -------------------------------------------------------------
+            // [추가] 타입 3: 즉사기 2초 전 경고 보라색/블랙홀 장판!
+            // -------------------------------------------------------------
+            else if (it->type == 3) {
+                shape.setRadius(64.f * 15.f);
+                shape.setOrigin(shape.getRadius(), shape.getRadius());
+                // 위압감 넘치는 보라색 반투명에 찐한 보라색 테두리
+                shape.setFillColor(sf::Color(100, 0, 150, 80));
+                shape.setOutlineColor(sf::Color(200, 0, 255));
+                shape.setOutlineThickness(3.f);
+            }
+
+            shape.setPosition(it->x * 64 + 32, it->y * 64 + 32);
+            window.draw(shape);
+            it++;
+        }
+    }
+
+    // 미니맵 렌더링을 위해 객체 맵 원본을 읽기 전용으로 넘겨주는 함수
+    const std::unordered_map<int, std::unique_ptr<GameObject>>& GetObjects() const {
+        return m_objects;
+    }
+
+    void AddSkillEffect(int x, int y, int type) {
+        m_bossEffects.push_back({ x, y, type });
     }
 };
