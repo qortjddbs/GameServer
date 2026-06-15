@@ -15,10 +15,16 @@
 #include <unordered_map>
 #include <tbb/concurrent_unordered_map.h>
 #include <tbb/concurrent_queue.h>
+#include <windows.h>
+#include <sql.h>
+#include <sqlext.h>
+
 #include "protocol_2026.h"
 
 #pragma comment(lib, "ws2_32.lib")
 #pragma comment(lib, "mswsock.lib")
+#pragma comment(lib, "odbc32.lib")
+
 
 constexpr int VIEW_RANGE = 7;         // 시야 반경 (8칸)
 constexpr int REGION_SIZE = 10;       // 한 지역(Region)의 가로/세로 길이
@@ -54,11 +60,24 @@ void InitServerMap() {
 }
 
 enum class SessionState { FREE, CONNECTED, INGAME, DEAD };
-enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN, EVENT_HP_RECOVERY };
+enum class EventType { EVENT_MOVE, EVENT_RESPAWN, EVENT_DESPAWN, EVENT_HP_RECOVERY, EVENT_AUTO_SAVE };
 enum class MonsterType { SKELETON, GOBLIN, FLYING_EYE, MUSHROOM };
 enum class AiType { FIXED_PEACE, ROAMING_AGGRO };
 enum ActionType : char { ACTION_ATTACK = 1, ACTION_HIT = 5, ACTION_DEAD = 6 };
-enum class IO_OP { RECV, SEND, ACCEPT, DO_AI };
+enum class IO_OP { RECV, SEND, ACCEPT, DO_AI, DB_RESULT_LOGIN };
+enum class DbTaskType { LOGIN_CHECK, SAVE_PLAYER };
+
+struct DbTask {
+	DbTaskType type;
+	int session_id;
+	char username[MAX_NAME_LEN];
+
+	int level;
+	long long exp;
+	int hp;
+	short x;
+	short y;
+};
 
 struct TimerEvent 
 {
@@ -79,6 +98,12 @@ struct IOContext
 	char buffer[1024];		// 실제 데이터 들어있는 곳
 	IO_OP opType;
 	SOCKET acceptSocket;	// 새로 들어올 손님의 소켓을 담아둘 바구니
+
+	int db_level = 1;
+	long long db_exp = 0;
+	int db_hp = 100;
+	short db_x = 0;
+	short db_y = 0;
 
 	IOContext(IO_OP op) : opType(op) {
 		ZeroMemory(&overlapped, sizeof(overlapped));
@@ -177,6 +202,35 @@ inline short GetRegionY(short y) {
 	return std::max((short)0, std::min((short)(MAX_REGION_Y - 1), (short)(y / REGION_SIZE)));
 }
 
+void GetRespawnPosition(unsigned char level, short& out_x, short& out_y) {
+	short offset_x = rand() % 100;
+	short offset_y = rand() % 100;
+
+	if (level <= 10) {
+		// 좌측 상단 마을
+		out_x = offset_x;
+		out_y = offset_y;
+	}
+	else if (level <= 20) {
+		// 우측 상단 마을
+		out_x = WORLD_WIDTH - 100 + offset_x;
+		out_y = offset_y;
+	}
+	else if (level <= 30) {
+		// 좌측 하단 마을
+		out_x = offset_x;
+		out_y = WORLD_HEIGHT - 100 + offset_y;
+	}
+	else {
+		// 우측 하단 마을 (고레벨)
+		out_x = WORLD_WIDTH - 100 + offset_x;
+		out_y = WORLD_HEIGHT - 100 + offset_y;
+	}
+
+	if (out_x >= WORLD_WIDTH) out_x = WORLD_WIDTH - 1;
+	if (out_y >= WORLD_HEIGHT) out_y = WORLD_HEIGHT - 1;
+}
+
 // 두 객체가 서로 시야(VIEW_RANGE) 내에 있는지 확인 (맨해튼 거리 기준)
 inline bool IsInView(short x1, short y1, short x2, short y2) {
 	return (abs(x1 - x2) <= VIEW_RANGE) && (abs(y1 - y2) <= VIEW_RANGE);
@@ -220,6 +274,8 @@ private:
 	std::vector<std::thread> workers;
 	std::priority_queue<TimerEvent, std::vector<TimerEvent>, std::greater<TimerEvent>> timer_queue;
 	std::mutex timer_mock;
+	tbb::concurrent_queue<DbTask> db_queue;
+	std::thread db_worker;
 
 public:
 	IocpServer() {
@@ -240,36 +296,57 @@ public:
 			sessions[real_index]->sessionIndex = real_index;
 			sessions[real_index]->id = npc_id;
 			sessions[real_index]->state.store(SessionState::INGAME);
-			sessions[real_index]->x = (rand() % 1900) + 100;
-			sessions[real_index]->y = (rand() % 1900) + 100;
-			sessions[real_index]->attack_power = 10;
-			
-			// 몬스터 타입 및 리젠 위치 기억
-			sessions[real_index]->monster_type = static_cast<MonsterType>(i % 4);
-			sessions[real_index]->origin_x = sessions[real_index]->x;
-			sessions[real_index]->origin_y = sessions[real_index]->y;
 
+			sessions[real_index]->monster_type = static_cast<MonsterType>(i % 4);
 			MonsterType m_type = sessions[real_index]->monster_type;
 
-			if (m_type == MonsterType::SKELETON) {
-				sprintf_s(sessions[real_index]->name, "Skeleton_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::FIXED_PEACE;
-			}
-			else if (m_type == MonsterType::GOBLIN) {
-				sprintf_s(sessions[real_index]->name, "Goblin_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
-			}
-			else if (m_type == MonsterType::FLYING_EYE) {
-				sprintf_s(sessions[real_index]->name, "Flying_eye_%d", i + 1);
-				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
-			}
-			else if (m_type == MonsterType::MUSHROOM) {
+			short rx = 0, ry = 0;
+
+			if (m_type == MonsterType::MUSHROOM) {
+				// 1구역: 좌상단 (100~1000, 100~1000)
+				rx = (rand() % 900) + 100; 
+				ry = (rand() % 900) + 100;
 				sprintf_s(sessions[real_index]->name, "Mushroom_%d", i + 1);
 				sessions[real_index]->ai_type = AiType::FIXED_PEACE;
+				sessions[real_index]->level = 5;
+				sessions[real_index]->max_hp = 50; sessions[real_index]->attack_power = 10;
+			}
+			else if (m_type == MonsterType::SKELETON) {
+				// 2구역: 우상단 (1000~2000, 0~1000)
+				rx = (rand() % 900) + 1000; 
+				ry = (rand() % 900) + 100;
+				sprintf_s(sessions[real_index]->name, "Skeleton_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
+				sessions[real_index]->level = 15;
+				sessions[real_index]->max_hp = 150; sessions[real_index]->attack_power = 25;
+			}
+			else if (m_type == MonsterType::GOBLIN) {
+				// 3구역: 좌하단 (100~1000, 1000~1900)
+				rx = (rand() % 900) + 100; 
+				ry = (rand() % 900) + 1000;
+				sprintf_s(sessions[real_index]->name, "Goblin_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
+				sessions[real_index]->level = 25;
+				sessions[real_index]->max_hp = 300; sessions[real_index]->attack_power = 40;
+			}
+			else if (m_type == MonsterType::FLYING_EYE) {
+				// 4구역: 우하단 (1000~2000, 1000~2000)
+				rx = (rand() % 900) + 1000; 
+				ry = (rand() % 900) + 1000;
+				sprintf_s(sessions[real_index]->name, "Flying_eye_%d", i + 1);
+				sessions[real_index]->ai_type = AiType::ROAMING_AGGRO;
+				sessions[real_index]->level = 35;
+				sessions[real_index]->max_hp = 500; sessions[real_index]->attack_power = 60;
 			}
 
-			short rx = GetRegionX(sessions[real_index]->x);
-			short ry = GetRegionY(sessions[real_index]->y);
+			sessions[real_index]->x = rx;
+			sessions[real_index]->y = ry;
+			sessions[real_index]->origin_x = rx;
+			sessions[real_index]->origin_y = ry;
+			sessions[real_index]->hp = sessions[real_index]->max_hp;
+
+			rx = GetRegionX(sessions[real_index]->x);
+			ry = GetRegionY(sessions[real_index]->y);
 			{
 				std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
 				g_regions[rx][ry].objects.insert(npc_id);
@@ -314,16 +391,18 @@ public:
 		// 기존 워커 쓰레드 생성 전에 타이머 전담 쓰레드 1개 먼저 생성
 		workers.emplace_back(&IocpServer::TimerLoop, this);
 
+		db_worker = std::thread(&IocpServer::DbWorkerLoop, this);
+
 		int threadCount = std::thread::hardware_concurrency(); // 컴퓨터 CPU 코어 개수 반환
 		for (int i = 0; i < threadCount; ++i) {
 			workers.emplace_back(&IocpServer::WorkerLoop, this);
 			// push_back은 객체를 넘기고, emplace_back은 객체 생성에 필요한 인자를 넘김
 		}
-		// std::cout << "Server Core Successfully Started on Port " << PORT << std::endl;
 	}
 
 	void Join() {
 		for (auto& th : workers) th.join();
+		if (db_worker.joinable()) db_worker.join();
 	}
 
 private:
@@ -427,6 +506,22 @@ private:
 			{
 				std::unique_lock<std::shared_mutex> wl(g_regions[new_rx][new_ry].lock);
 				g_regions[new_rx][new_ry].objects.insert(id);
+			}
+
+			Session* obj = GetSessionId(id);
+			if (IsPlayer(id) && obj && strncmp(obj->name, "Dummy_", 6) != 0) {
+				DbTask task;
+				task.type = DbTaskType::SAVE_PLAYER;
+				strcpy_s(task.username, obj->name);
+
+				// 이동 중이므로 락 없이 현재 값 복사 (이미 세션 락이 필요한 연산은 위에서 처리됨)
+				task.level = obj->level;
+				task.exp = obj->exp;
+				task.hp = obj->hp;
+				task.x = nx; // 최신 좌표
+				task.y = ny; // 최신 좌표
+
+				db_queue.push(task);
 			}
 		}
 
@@ -738,8 +833,8 @@ private:
 
 		std::lock_guard<std::mutex> lock(npc->sessionLock);
 		npc->hp = npc->max_hp;
-		npc->x = (rand() % 1900) + 100;		// 100 ~ 2000
-		npc->y = (rand() % 1900) + 100;		// 100 ~ 2000
+		npc->x = (rand() % 1800) + 100;		// 100 ~ 2000
+		npc->y = (rand() % 1800) + 100;		// 100 ~ 2000
 		npc->state.store(SessionState::INGAME);
 
 		// Region 재등록 및 뷰리스트 갱신
@@ -774,7 +869,6 @@ private:
 		//std::cout << "NPC " << npc_id << " respawned at (" << npc->x << ", " << npc->y << ")" << std::endl;
 	}
 
-	// 데미지 판정 함수
 	void HandleDamage(int attacker_id, int victim_id, int damage) {
 		Session* attacker = GetSessionId(attacker_id);
 		Session* victim = GetSessionId(victim_id);
@@ -793,6 +887,7 @@ private:
 
 		bool is_victim_dead = false;
 		int exp_gained = 0;
+		long long required_exp = 100LL * (1LL << (attacker->level - 1));
 
 		char sysMsg[256];
 		if (IsPlayer(attacker_id)) {
@@ -830,6 +925,10 @@ private:
 					// 몬스터 사망 시 시체 상태로 전환 및 경험치 계산
 					victim->state.store(SessionState::DEAD);
 					exp_gained = (victim->level * victim->level * 2);
+
+					if (victim->ai_type == AiType::ROAMING_AGGRO) {
+						exp_gained *= 2;
+					}
 				}
 			}
 			else {
@@ -843,10 +942,8 @@ private:
 		// 사망 처리
 		if (is_victim_dead) {
 			if (IsPlayer(victim_id)) {
-				// 플레이어 부활 (일단 100,100 안으로)
-				//std::cout << "[Death] Player " << victim->name << " died. Sent to town." << std::endl;
-				short respqwn_x = rand() % 2000;
-				short respawn_y = rand() % 100;
+				short respqwn_x, respawn_y;
+				GetRespawnPosition(victim->level, respqwn_x, respawn_y);
 				MoveObject(victim_id, respqwn_x, respawn_y);
 
 				S2C_StatusChange statusPacket = { sizeof(statusPacket), S2C_STATUS_CHANGE, victim_id, victim->hp, victim->max_hp, victim->exp, victim->level };
@@ -866,22 +963,55 @@ private:
 
 				// 플레이어 경험치 및 레벨업 처리
 				if (IsPlayer(attacker_id) && exp_gained > 0) {
-					std::lock_guard<std::mutex> myLock(attacker->sessionLock);
-					attacker->exp += exp_gained;
+					bool is_leveled_up = false;
+					int current_level, current_hp, current_max_hp;
+					long long current_exp;
+					short current_x, current_y;
+					char current_name[MAX_NAME_LEN];
 
+					{
+						std::lock_guard<std::mutex> myLock(attacker->sessionLock);
+						attacker->exp += exp_gained;
+
+						while (attacker->exp >= required_exp) {
+							attacker->exp -= required_exp;
+							attacker->level++;
+							attacker->max_hp += 50;
+							attacker->attack_power += 50;
+							attacker->hp = attacker->max_hp;
+							is_leveled_up = true;
+
+							required_exp = 100LL * (1LL << (attacker->level - 1));
+						}
+
+						// 무거운 I/O 작업을 락 바깥에서 하기 위해 현재 상태를 복사
+						current_level = attacker->level;
+						current_hp = attacker->hp;
+						current_max_hp = attacker->max_hp;
+						current_exp = attacker->exp;
+						current_x = attacker->x;
+						current_y = attacker->y;
+						strcpy_s(current_name, attacker->name);
+					}
 					char killMsg[256];
 					sprintf_s(killMsg, "%s를 처치하여 %d의 경험치를 얻었습니다.", victim->name, exp_gained);
 					SendSystemMessage(attacker_id, killMsg);
 
-					while (attacker->exp >= attacker->level * attacker->level * 100) {
-						attacker->exp -= attacker->level * attacker->level * 100;
-						attacker->level++;
-						attacker->max_hp += 50;
-						attacker->attack_power += 50;
-						attacker->hp = attacker->max_hp;	// 레벨업 시 체력 전부 회복
+					if (is_leveled_up && strncmp(current_name, "Dummy_", 6) != 0) {
+						DbTask task;
+						task.type = DbTaskType::SAVE_PLAYER;
+						strcpy_s(task.username, current_name);
+						task.level = current_level;
+						task.exp = current_exp;
+						task.hp = current_hp;
+						task.x = current_x;
+						task.y = current_y;
+
+						db_queue.push(task);
 					}
 
-					S2C_StatusChange myStatus = { sizeof(myStatus), S2C_STATUS_CHANGE, attacker_id, attacker->hp, attacker->max_hp, attacker->exp, attacker->level };
+					// 스냅샷으로 찍어둔 안전한 지역 변수를 사용해 패킷 조립 및 전송
+					S2C_StatusChange myStatus = { sizeof(myStatus), S2C_STATUS_CHANGE, attacker_id, current_hp, current_max_hp, current_exp, current_level };
 					attacker->SendPacket(&myStatus);
 					BroadcastToViewers(attacker_id, &myStatus);
 				}
@@ -1058,9 +1188,160 @@ private:
 		chatPacket.size = sizeof(S2C_ChatMessage);
 		chatPacket.type = S2C_CHAT_MESSAGE;
 		chatPacket.object_id = player_id;
+		chatPacket.chatType = 0; // 시스템 메시지 타입
 		strcpy_s(chatPacket.message, msg);
 
-		// player->SendPacket(&chatPacket);
+		player->SendPacket(&chatPacket);
+	}
+
+	// 06.15 DB 연동
+	void DbWorkerLoop() {
+		SQLHENV hEnv = SQL_NULL_HENV;
+		SQLHDBC hDbc = SQL_NULL_HDBC;
+		SQLRETURN retcode;
+
+		// 1. 환경 핸들 할당 및 ODBC 버전 설정
+		SQLAllocHandle(SQL_HANDLE_ENV, SQL_NULL_HANDLE, &hEnv);
+		SQLSetEnvAttr(hEnv, SQL_ATTR_ODBC_VERSION, (SQLPOINTER)SQL_OV_ODBC3, 0);
+
+		// 2. 연결 핸들 할당
+		SQLAllocHandle(SQL_HANDLE_DBC, hEnv, &hDbc);
+
+		// 3. MSSQL 연결 (Windows 인증 방식)
+		// 주의: SSMS에서 접속하는 서버 이름이 "localhost\SQLEXPRESS"인지 확인하세요.
+		SQLWCHAR* connStr = (SQLWCHAR*)L"DRIVER={ODBC Driver 17 for SQL Server};SERVER=localhost\\SQLEXPRESS;DATABASE=GameDB;Trusted_Connection=yes;";
+		SQLWCHAR outStr[1024];
+		SQLSMALLINT outStrLen;
+
+		retcode = SQLDriverConnect(hDbc, NULL, connStr, SQL_NTS, outStr, 1024, &outStrLen, SQL_DRIVER_NOPROMPT);
+
+		if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+			// std::cout << "[DB] MSSQL Connected Successfully!" << std::endl;
+		}
+		else {
+			std::cout << "[DB Error] Failed to connect to MSSQL!" << std::endl;
+
+			// -----------------------------------------------------------------
+			// [추가] ODBC가 뱉어내는 진짜 에러 메시지 추출하기
+			// -----------------------------------------------------------------
+			SQLWCHAR sqlState[6], msg[1024];
+			SQLINTEGER nativeError;
+			SQLSMALLINT msgLen;
+
+			if (SQLGetDiagRec(SQL_HANDLE_DBC, hDbc, 1, sqlState, &nativeError, msg, 1024, &msgLen) == SQL_SUCCESS) {
+				// 한글 윈도우 환경에서 와이드 문자열(SQLWCHAR)을 출력
+				std::wcout << L"SQLState: " << sqlState << std::endl;
+				std::wcout << L"Message: " << msg << std::endl;
+			}
+
+			// 연결 실패 시 핸들 반환
+			SQLFreeHandle(SQL_HANDLE_DBC, hDbc);
+			SQLFreeHandle(SQL_HANDLE_ENV, hEnv);
+			return;
+		}
+
+		while (true) {
+			DbTask task;
+			if (db_queue.try_pop(task)) {
+
+				if (task.type == DbTaskType::LOGIN_CHECK) {
+					SQLHSTMT hStmt = SQL_NULL_HSTMT;
+					SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
+
+					char query[256];
+					sprintf_s(query, "SELECT level, exp, hp, x, y FROM users WHERE name = '%s'", task.username);
+
+					int len = MultiByteToWideChar(CP_ACP, 0, query, -1, NULL, 0);
+					std::wstring wQuery(len, 0);
+					MultiByteToWideChar(CP_ACP, 0, query, -1, &wQuery[0], len);
+
+					retcode = SQLExecDirect(hStmt, (SQLWCHAR*)wQuery.c_str(), SQL_NTS);
+
+					if (retcode == SQL_SUCCESS || retcode == SQL_SUCCESS_WITH_INFO) {
+						IOContext* dbCtx = new IOContext(IO_OP::DB_RESULT_LOGIN);
+
+						if (SQLFetch(hStmt) == SQL_SUCCESS) {
+							SQLGetData(hStmt, 1, SQL_C_LONG, &dbCtx->db_level, 0, NULL);
+							SQLGetData(hStmt, 2, SQL_C_SBIGINT, &dbCtx->db_exp, 0, NULL);
+							SQLGetData(hStmt, 3, SQL_C_LONG, &dbCtx->db_hp, 0, NULL);
+
+							int temp_x, temp_y;
+							SQLGetData(hStmt, 4, SQL_C_LONG, &temp_x, 0, NULL);
+							SQLGetData(hStmt, 5, SQL_C_LONG, &temp_y, 0, NULL);
+							dbCtx->db_x = (short)temp_x;
+							dbCtx->db_y = (short)temp_y;
+						}
+						else {
+							SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
+							SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
+
+							char insertQuery[256];
+							sprintf_s(insertQuery, "INSERT INTO users (name, level, exp, hp, x, y) VALUES ('%s', 1, 0, 100, 100, 100)", task.username);
+
+							int len2 = MultiByteToWideChar(CP_ACP, 0, insertQuery, -1, NULL, 0);
+							std::wstring wInsert(len2, 0);
+							MultiByteToWideChar(CP_ACP, 0, insertQuery, -1, &wInsert[0], len2);
+
+							SQLExecDirect(hStmt, (SQLWCHAR*)wInsert.c_str(), SQL_NTS);
+
+							dbCtx->db_level = 1;  dbCtx->db_exp = 0;  dbCtx->db_hp = 100;
+							dbCtx->db_x = 100;     dbCtx->db_y = 100;
+						}
+						PostQueuedCompletionStatus(hIocp, 1, task.session_id, &dbCtx->overlapped);
+					}
+					SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
+				}
+				else if (task.type == DbTaskType::SAVE_PLAYER) {
+					SQLHSTMT hStmt = SQL_NULL_HSTMT;
+					SQLAllocHandle(SQL_HANDLE_STMT, hDbc, &hStmt);
+
+					char updateQuery[512];
+					sprintf_s(updateQuery, "UPDATE users SET level=%d, exp=%lld, hp=%d, x=%d, y=%d WHERE name='%s'",
+						task.level, task.exp, task.hp, task.x, task.y, task.username);
+
+					int len = MultiByteToWideChar(CP_ACP, 0, updateQuery, -1, NULL, 0);
+					std::wstring wUpdate(len, 0);
+					MultiByteToWideChar(CP_ACP, 0, updateQuery, -1, &wUpdate[0], len);
+
+					SQLExecDirect(hStmt, (SQLWCHAR*)wUpdate.c_str(), SQL_NTS);
+
+					SQLFreeHandle(SQL_HANDLE_STMT, hStmt);
+				}
+			}
+			else {
+				std::this_thread::sleep_for(std::chrono::milliseconds(10));
+			}
+		}
+	}
+
+	// 06.15 DB 자동저장
+	void ProcessAutoSave(int player_id) {
+		Session* player = GetSessionId(player_id);
+
+		// 플레이어가 기적적으로 살아있고 게임 중일 때만 저장
+		if (!player || player->state.load() != SessionState::INGAME) return;
+
+		// 스트레스 테스트용 더미는 DB 부하 방지를 위해 오토세이브 제외
+		if (strncmp(player->name, "Dummy_", 6) != 0) {
+			DbTask task;
+			task.type = DbTaskType::SAVE_PLAYER;
+			strcpy_s(task.username, player->name);
+
+			// 멀티스레드 안전을 위해 데이터를 꺼낼 때만 잠깐 세션락을 잡습니다.
+			{
+				std::lock_guard<std::mutex> lock(player->sessionLock);
+				task.level = player->level;
+				task.exp = player->exp;
+				task.hp = player->hp;
+				task.x = player->x;
+				task.y = player->y;
+			}
+			db_queue.push(task);
+			// std::cout << "[Auto-Save] Player " << player->name << "'s data pushed to DB queue." << std::endl;
+		}
+
+		// [중요] 다음 1분 뒤에 다시 저장되도록 무한 오토세이브 루프 가동
+		AddTimerEvent(player_id, EventType::EVENT_AUTO_SAVE, 60000);
 	}
 
 	void WorkerLoop() {
@@ -1141,8 +1422,64 @@ private:
 				else if (type == EventType::EVENT_RESPAWN) ProcessNpcRespawn(obj_id);
 				else if (type == EventType::EVENT_DESPAWN) KillObject(obj_id);
 				else if (type == EventType::EVENT_HP_RECOVERY) ProcessHpRecovery(obj_id);
+				else if (type == EventType::EVENT_AUTO_SAVE) ProcessAutoSave(obj_id);
 
 				delete ioCtx;
+				break;
+			}
+			case IO_OP::DB_RESULT_LOGIN: {
+				Session* session = GetSessionId(sessionId);
+				if (session) {
+					std::lock_guard<std::mutex> lock(session->sessionLock);
+
+					// 1. DB에서 온 택배 상자(ioCtx)의 데이터를 내 세션에 덮어쓰기
+					session->level = ioCtx->db_level;
+					session->exp = ioCtx->db_exp;
+					session->hp = ioCtx->db_hp;
+					session->max_hp = 100 + ((session->level - 1) * 50); // 레벨 비례 최대체력
+					session->attack_power = 50 + ((session->level - 1) * 50);
+					session->x = ioCtx->db_x;
+					session->y = ioCtx->db_y;
+					session->state = SessionState::INGAME;
+
+					// 2. 클라이언트에 로그인 성공 패킷 및 내 아바타 정보 쏘기
+					S2C_LoginResult res = { sizeof(res), S2C_LOGIN_RESULT, true, "DB Login Success!" };
+					session->SendPacket(&res);
+
+					S2C_AvatarInfo info = { sizeof(info), S2C_AVATAR_INFO, sessionId, 0, session->x, session->y, session->direction, session->hp, session->max_hp, session->exp, session->level };
+					session->SendPacket(&info);
+
+					// 3. 맵(Region) 등록 및 뷰리스트 갱신 (기존 C2S_LOGIN에 있던 로직 그대로)
+					short rx = GetRegionX(session->x);
+					short ry = GetRegionY(session->y);
+					{
+						std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+						g_regions[rx][ry].objects.insert(sessionId);
+					}
+
+					auto near_objs = GetNearbyObjects(session->x, session->y);
+					for (int n_id : near_objs) {
+						if (n_id == sessionId) continue;
+						Session* target = GetSessionId(n_id);
+						if (target && target->state.load() == SessionState::INGAME && IsInView(session->x, session->y, target->x, target->y)) {
+							{
+								std::lock_guard<std::mutex> vl(session->viewLock);
+								session->viewList.insert(n_id);
+							}
+							SendAddObject(sessionId, n_id);
+
+							if (IsPlayer(n_id)) SendAddObject(n_id, sessionId);
+							else {
+								if (target->viewers_count.fetch_add(1) == 0) {
+									target->is_active.store(true);
+									AddTimerEvent(n_id, EventType::EVENT_MOVE, 500);
+								}
+							}
+						}
+					}
+					AddTimerEvent(sessionId, EventType::EVENT_AUTO_SAVE, 60000);
+				}
+				delete ioCtx; // 다 쓴 택배 상자 폐기
 				break;
 			}
 			}
@@ -1200,67 +1537,87 @@ private:
 		// 로그인 처리
 		if (type == C2S_LOGIN) {
 			C2S_Login* loginPacket = reinterpret_cast<C2S_Login*>(packet);
-			strcpy_s(session->name, loginPacket->username);
 
-			// 멀티쓰레드 환경에서 안전한 랜덤 엔진 준비
-			thread_local std::random_device rd;
-			thread_local std::mt19937 gen(rd());
+			bool is_duplicate = false;
+			for (int i = 0; i < MAX_PLAYERS; ++i) {
+				if (i == sessionId) continue; // 나 자신은 제외
 
-			// (0, 맵의 최대 크기 - 1) 사이의 좌표를 뽑는 분포기
-			std::uniform_int_distribution<short> dist_x(0, WORLD_WIDTH - 1);
-			std::uniform_int_distribution<short> dist_y(0, WORLD_HEIGHT - 1);
-
-			short spawn_x, spawn_y;
-
-			// 장애물이 없는 안전한 좌표 찾을 때까지 뽑기
-			do {
-				spawn_x = dist_x(gen);
-				spawn_y = dist_y(gen);
-			} while (g_wall[spawn_x][spawn_y] == true);
-
-			session->x = spawn_x;
-			session->y = spawn_y;
-			session->state = SessionState::INGAME;
-
-			// 로그인 성공 및 아바타 정보 전송
-			S2C_LoginResult res = { sizeof(res), S2C_LOGIN_RESULT, true, "Welcome!" };
-			session->SendPacket(&res);
-
-			S2C_AvatarInfo info = { sizeof(info), S2C_AVATAR_INFO, sessionId, 0, session->x, session->y, session->direction, session->hp, session->max_hp, session->exp, session->level };
-			session->SendPacket(&info);
-
-			// 로그인 시 현재 좌표를 Region에 등록 + 주변 객체 목록 갱신
-			short rx = GetRegionX(session->x);
-			short ry = GetRegionY(session->y);
-			{
-				std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
-				g_regions[rx][ry].objects.insert(sessionId);
+				Session* other = sessions[i];
+				// 빈 방이 아니고, 들어오려는 이름과 똑같은 이름이 이미 존재한다면
+				if (other->state.load() != SessionState::FREE && strcmp(other->name, loginPacket->username) == 0) {
+					is_duplicate = true;
+					break;
+				}
 			}
 
-			auto near_objs = GetNearbyObjects(session->x, session->y);
-			for (int n_id : near_objs) {
-				if (n_id == sessionId) continue;
-				Session* target = GetSessionId(n_id);
-				if (target && target->state.load() == SessionState::INGAME && IsInView(session->x, session->y, target->x, target->y)) {
-					{
-						std::lock_guard<std::mutex> vl(session->viewLock);
-						session->viewList.insert(n_id);
+			// 중복이라면 실패 패킷을 보내고 즉시 쫓아냄
+			if (is_duplicate) {
+				S2C_LoginResult res = { sizeof(res), S2C_LOGIN_RESULT, false, "이미 접속 중인 아이디입니다." };
+				session->SendPacket(&res);
+				Disconnect(sessionId);
+				return; // DB 큐에 넣지 않고 함수 종료
+			}
+			// -------------------------------------------------------------
 
-					}					
-					SendAddObject(sessionId, n_id);	// 나한테 새로 보이는 객체 정보 보내기
+			// 중복이 아니면 정상적으로 이름 세팅
+			strcpy_s(session->name, loginPacket->username);
 
-					if (IsPlayer(n_id)) SendAddObject(n_id, sessionId);	// 새로 보이는 객체가 유저면 그 유저한테 내 정보 보내기
-					else {
-						// npc라면 나를 보는 사람 수 증가 & 깨우기 (0이었으면)
-						if (target->viewers_count.fetch_add(1) == 0) {
-							target->is_active.store(true);
-							AddTimerEvent(n_id, EventType::EVENT_MOVE, 500);
+			// 1. 스트레스 테스트용 더미 클라이언트는 DB 안 거치고 즉시 접속 처리
+			if (strncmp(session->name, "Dummy_", 6) == 0) {
+				session->level = (rand() % 40) + 1;
+				short spawn_x, spawn_y;
+
+				do {
+					GetRespawnPosition(session->level, spawn_x, spawn_y);
+				} while (g_wall[spawn_x][spawn_y] == true);
+
+				session->x = spawn_x;
+				session->y = spawn_y;
+				session->state = SessionState::INGAME;
+
+				S2C_LoginResult res = { sizeof(res), S2C_LOGIN_RESULT, true, "Welcome Dummy!" };
+				session->SendPacket(&res);
+
+				S2C_AvatarInfo info = { sizeof(info), S2C_AVATAR_INFO, sessionId, 0, session->x, session->y, session->direction, session->hp, session->max_hp, session->exp, session->level };
+				session->SendPacket(&info);
+
+				short rx = GetRegionX(session->x);
+				short ry = GetRegionY(session->y);
+				{
+					std::unique_lock<std::shared_mutex> wl(g_regions[rx][ry].lock);
+					g_regions[rx][ry].objects.insert(sessionId);
+				}
+
+				auto near_objs = GetNearbyObjects(session->x, session->y);
+				for (int n_id : near_objs) {
+					if (n_id == sessionId) continue;
+					Session* target = GetSessionId(n_id);
+					if (target && target->state.load() == SessionState::INGAME && IsInView(session->x, session->y, target->x, target->y)) {
+						{
+							std::lock_guard<std::mutex> vl(session->viewLock);
+							session->viewList.insert(n_id);
+						}
+						SendAddObject(sessionId, n_id);
+
+						if (IsPlayer(n_id)) SendAddObject(n_id, sessionId);
+						else {
+							if (target->viewers_count.fetch_add(1) == 0) {
+								target->is_active.store(true);
+								AddTimerEvent(n_id, EventType::EVENT_MOVE, 500);
+							}
 						}
 					}
 				}
 			}
+			// 2. 실제 플레이어가 접속했을 때는 DB 스레드에게 "정보 찾아와!" 하고 지시서(task)를 보냄
+			else {
+				DbTask task;
+				task.type = DbTaskType::LOGIN_CHECK;
+				task.session_id = sessionId;
+				strcpy_s(task.username, session->name);
 
-			// std::cout << "[Login] Player " << session->name << " entered at (" << session->x << ", " << session->y << ")" << std::endl;
+				db_queue.push(task); // DB 스레드쪽으로 택배 발송!
+			}
 		}
 		// 인게임 패킷 (이동, 공격)
 		else if (session->state.load() == SessionState::INGAME) {
@@ -1270,17 +1627,13 @@ private:
 			if (type == C2S_MOVE) {
 				auto duration = std::chrono::duration_cast<std::chrono::milliseconds>(now - session->last_move_time).count();
 
+				int move_cooldown = std::max(200, 500 - (session->level - 1) * 10);
 				// 1. 비정상적인 패킷 폭주 감지 (예: 0.5초가 정상인데 0.05초 만에 또 패킷이 옴)
 				// 네트워크 지연(핑 튀는 현상)을 고려하여 여유를 조금 둡니다 (예: 100ms 이하로 들어오면 비정상으로 간주)
-				if (duration < 100) {
+				if (duration < move_cooldown - 50) {
 					// std::cout << "[Warning] Player " << session->name << " is sending packets too fast! Disconnecting..." << std::endl;
 					// Disconnect(sessionId); // 즉시 쫓아냄
 					return;
-				}
-
-				// 2. 정상적인 쿨타임 검증 (네트워크 지연 고려하여 400ms 정도로 너그럽게 허용할 수도 있습니다)
-				if (duration < 500) {
-					return; // 무시
 				}
 
 				session->last_move_time = now;
@@ -1395,15 +1748,31 @@ private:
 		if (session) {
 			SessionState expected = session->state.load();
 			if (expected == SessionState::FREE || !session->state.compare_exchange_strong(expected, SessionState::FREE)) {
-				return; // 이미 다른 스레드가 Disconnect 처리를 완료했음
+				return;
 			}
 			if (IsPlayer(id)) {
-				std::lock_guard<std::mutex> vl(session->viewLock);
-				for (int v_id : session->viewList) {
-					if (!IsPlayer(v_id)) {
-						Session* npc = GetSessionId(v_id);
-						if (npc) npc->viewers_count.fetch_sub(1);
+				{
+					std::lock_guard<std::mutex> vl(session->viewLock);
+					for (int v_id : session->viewList) {
+						if (!IsPlayer(v_id)) {
+							Session* npc = GetSessionId(v_id);
+							if (npc) npc->viewers_count.fetch_sub(1);
+						}
 					}
+				}
+				
+
+				if (strncmp(session->name, "Dummy_", 6) != 0) {
+					DbTask task;
+					task.type = DbTaskType::SAVE_PLAYER;
+					strcpy_s(task.username, session->name);
+					task.level = session->level;
+					task.exp = session->exp;
+					task.hp = session->hp;
+					task.x = session->x;
+					task.y = session->y;
+
+					db_queue.push(task); // DB 스레드쪽으로 저장 지시!
 				}
 			}
 			session->Reset();

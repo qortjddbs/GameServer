@@ -343,7 +343,14 @@ int main() {
         return -1;
     }
 
-    C2S_Login loginPacket = { sizeof(C2S_Login), C2S_LOGIN, "MyPlayer" };
+    string input_id;
+    cout << "ID : ";
+    cin >> input_id;
+
+    C2S_Login loginPacket;
+	loginPacket.size = sizeof(C2S_Login);
+	loginPacket.type = C2S_LOGIN;
+	strcpy_s(loginPacket.username, input_id.c_str());
     netMgr.SendPacket(&loginPacket);
 
 	// ==========================================
@@ -430,6 +437,9 @@ int main() {
             if (myAvatar != nullptr && !isChatting) {
                 bool tryAttack = sf::Keyboard::isKeyPressed(sf::Keyboard::A);
 
+                // 레벨 1 = 0.5초 / 레벨 11 = 0.4초 / 레벨 31 = 0.2초 (최대 속도)
+                float moveCooldown = std::max(0.2f, 0.5f - ((myAvatar->level - 1) * 0.01f));
+
                 if (tryAttack && attackTimer.getElapsedTime().asSeconds() >= 1.0f && !myAvatar->isActionPlaying) {
                     C2S_Attack attackPacket;
                     memset(&attackPacket, 0, sizeof(attackPacket));
@@ -440,7 +450,7 @@ int main() {
                     netMgr.SendPacket(&attackPacket);
                     attackTimer.restart();
                 }
-                else if (currentDir != -1 && !myAvatar->isActionPlaying && moveTimer.getElapsedTime().asSeconds() >= 0.5f) {
+                else if (currentDir != -1 && !myAvatar->isActionPlaying && moveTimer.getElapsedTime().asSeconds() >= moveCooldown) {
                     C2S_Move movePacket;
                     memset(&movePacket, 0, sizeof(movePacket));
                     movePacket.size = sizeof(movePacket);
@@ -573,7 +583,7 @@ int main() {
             expBg.setOutlineThickness(1.f);
 
             // 경험치 비율 계산 (서버 레벨업 요구치 기준: 레벨 * 100)
-            unsigned long long max_exp = myAvatar->level * 100;
+            unsigned long long max_exp = 100LL * (1LL << (myAvatar->level - 1));
             float expRatio = (float)myAvatar->exp / max_exp;
             if (expRatio > 1.0f) expRatio = 1.0f;
 
