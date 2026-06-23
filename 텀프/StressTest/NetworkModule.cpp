@@ -131,7 +131,9 @@ void ProcessPacket(int ci, unsigned char packet[]) {
 			}
 			// 지연 시간(Lag) 측정
 			if (ci == my_id && move_packet->move_time != 0) {
-				auto d_ms = duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count() - move_packet->move_time;
+				unsigned now_ms = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
+				int d_ms = static_cast<int>(now_ms - move_packet->move_time);
+
 				if (global_delay < d_ms) global_delay++;
 				else if (global_delay > d_ms) global_delay--;
 			}
@@ -319,6 +321,8 @@ void Test_Thread() {
 			my_packet.move_time = static_cast<unsigned>(duration_cast<milliseconds>(high_resolution_clock::now().time_since_epoch()).count());
 
 			SendPacket(i, &my_packet);
+
+			// std::this_thread::sleep_for(std::chrono::milliseconds(1));
 		}
 	}
 }
