@@ -1,13 +1,13 @@
 #include "ResourceManager.h"
 
 bool ResourceManager::LoadTexture(const std::string& id, const std::string& filename) {
-    sf::Texture texture;
-    // 파일 로드에 성공하면 맵에 이름표(id)를 붙여서 저장
+	sf::Texture& texture = m_textures[id]; // 맵에서 id에 해당하는 텍스처를 가져오거나 새로 생성
     if (texture.loadFromFile(filename)) {
-        m_textures[id] = std::move(texture);
         return true;
-    }
+	}
+
     std::cout << "[오류] 텍스처 로드 실패: " << filename << std::endl;
+	m_textures.erase(id); // 로드 실패 시 맵에서 제거
     return false;
 }
 
@@ -17,12 +17,14 @@ sf::Texture& ResourceManager::GetTexture(const std::string& id) {
 }
 
 bool ResourceManager::LoadFont(const std::string& id, const std::string& filename) {
-    sf::Font font;
+    sf::Font& font = m_fonts[id];
+
     if (font.loadFromFile(filename)) {
-        m_fonts[id] = std::move(font);
-        return true;
+        return true; // 로드 성공
     }
+
     std::cout << "[오류] 폰트 로드 실패: " << filename << std::endl;
+    m_fonts.erase(id);
     return false;
 }
 
